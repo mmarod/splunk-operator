@@ -25,8 +25,6 @@ const (
 	ObjectStoragePausedAnnotation = "objectstorage.enterprise.splunk.com/paused"
 )
 
-// +kubebuilder:validation:XValidation:rule="self.provider == oldSelf.provider",message="provider is immutable once created"
-// +kubebuilder:validation:XValidation:rule="self.s3 == oldSelf.s3",message="s3 is immutable once created"
 // +kubebuilder:validation:XValidation:rule="self.provider != 's3' || has(self.s3)",message="s3 must be provided when provider is s3"
 // ObjectStorageSpec defines the desired state of ObjectStorage
 type ObjectStorageSpec struct {
@@ -50,6 +48,54 @@ type S3Spec struct {
 	// +kubebuilder:validation:Pattern=`^(?:s3://)?[a-z0-9.-]{3,63}(?:/[^\s]+)?$`
 	// S3 bucket path
 	Path string `json:"path"`
+
+	// +optional
+	// Whether to verify the server's SSL certificate
+	SSLVerifyServerCert *bool `json:"sslVerifyServerCert,omitempty"`
+
+	// +optional
+	// Comma-separated list of SSL versions to support
+	SSLVersions string `json:"sslVersions,omitempty"`
+
+	// +optional
+	// Common name to check in the server's SSL certificate
+	SSLCommonNameToCheck string `json:"sslCommonNameToCheck,omitempty"`
+
+	// +optional
+	// Alternate name to check in the server's SSL certificate
+	SSLAltNameToCheck string `json:"sslAltNameToCheck,omitempty"`
+
+	// +optional
+	// Path to the root CA certificate file inside the Splunk container. Users must mount this file via volumes.
+	SSLRootCAPath string `json:"sslRootCAPath,omitempty"`
+
+	// +optional
+	// Cipher suite string for SSL connections
+	CipherSuite string `json:"cipherSuite,omitempty"`
+
+	// +optional
+	// ECDH curves for SSL connections
+	ECDHCurves string `json:"ecdhCurves,omitempty"`
+
+	// +optional
+	// Path to the Diffie-Hellman parameter file inside the Splunk container. Users must mount this file via volumes.
+	DHFile string `json:"dhFile,omitempty"`
+
+	// +optional
+	// Encryption scheme for data at rest (e.g. "SSE-S3", "SSE-KMS")
+	EncryptionScheme string `json:"encryptionScheme,omitempty"`
+
+	// +optional
+	// KMS endpoint URL for encryption key management
+	KMSEndpoint string `json:"kmsEndpoint,omitempty"`
+
+	// +optional
+	// KMS key ID for encryption
+	KeyID string `json:"keyID,omitempty"`
+
+	// +optional
+	// Interval for refreshing the encryption key (e.g. "1d")
+	KeyRefreshInterval string `json:"keyRefreshInterval,omitempty"`
 }
 
 // ObjectStorageStatus defines the observed state of ObjectStorage.

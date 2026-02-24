@@ -2272,6 +2272,126 @@ func TestGetQueueAndPipelineInputsForIndexerConfFilesSQSCP(t *testing.T) {
 	}, pipelineChangedFields)
 }
 
+func TestGetQueueAndPipelineInputsForIndexerConfFilesAllFields(t *testing.T) {
+	provider := "sqs_smartbus"
+	maxConn := int32(10)
+	maxRetries := int32(8)
+	timeoutConnect := int32(30)
+	timeoutRead := int32(60)
+	timeoutWrite := int32(45)
+	timeoutRecv := int32(20)
+	timeoutVis := int32(300)
+	bufferVis := int32(120)
+	execWorkers := int32(4)
+	minPending := int32(100)
+	renewRetries := int32(3)
+	sslVerify := true
+
+	queue := &enterpriseApi.Queue{
+		Spec: enterpriseApi.QueueSpec{
+			Provider: "sqs",
+			SQS: enterpriseApi.SQSSpec{
+				Name:                    "test-queue",
+				AuthRegion:              "us-west-2",
+				Endpoint:                "https://sqs.us-west-2.amazonaws.com",
+				DLQ:                     "sqs-dlq-test",
+				MaxConnections:          &maxConn,
+				MessageGroupID:          "my-group",
+				RetryPolicy:             "none",
+				MaxRetriesPerPart:       &maxRetries,
+				TimeoutConnect:          &timeoutConnect,
+				TimeoutRead:             &timeoutRead,
+				TimeoutWrite:            &timeoutWrite,
+				TimeoutReceiveMessage:   &timeoutRecv,
+				TimeoutVisibility:       &timeoutVis,
+				BufferVisibility:        &bufferVis,
+				ExecutorMaxWorkersCount: &execWorkers,
+				MinPendingMessages:      &minPending,
+				RenewRetries:            &renewRetries,
+				EncodingFormat:          "json",
+				SendInterval:            "10s",
+				DLQProcessInterval:      "2d",
+			},
+		},
+	}
+
+	os := &enterpriseApi.ObjectStorage{
+		Spec: enterpriseApi.ObjectStorageSpec{
+			Provider: "s3",
+			S3: enterpriseApi.S3Spec{
+				Endpoint:             "https://s3.us-west-2.amazonaws.com",
+				Path:                 "bucket/key",
+				SSLVerifyServerCert:  &sslVerify,
+				SSLVersions:          "tls1.2",
+				SSLCommonNameToCheck: "*.example.com",
+				SSLAltNameToCheck:    "alt.example.com",
+				SSLRootCAPath:        "/opt/splunk/etc/auth/ca.pem",
+				CipherSuite:          "ECDHE-RSA-AES256-GCM-SHA384",
+				ECDHCurves:           "prime256v1",
+				DHFile:               "/opt/splunk/etc/auth/dh.pem",
+				EncryptionScheme:     "SSE-KMS",
+				KMSEndpoint:          "https://kms.us-west-2.amazonaws.com",
+				KeyID:                "my-key-id",
+				KeyRefreshInterval:   "1d",
+			},
+		},
+	}
+
+	inputs, outputs, _ := getQueueAndPipelineInputsForIndexerConfFiles(&queue.Spec, &os.Spec, "key", "secret")
+
+	// Helper to check if a kv pair exists in the slice
+	containsKV := func(slice [][]string, key, value string) bool {
+		for _, kv := range slice {
+			if kv[0] == key && kv[1] == value {
+				return true
+			}
+		}
+		return false
+	}
+
+	// Verify new SQS fields in inputs
+	assert.True(t, containsKV(inputs, fmt.Sprintf("remote_queue.%s.max_count.max_retries_per_part", provider), "8"))
+	assert.True(t, containsKV(inputs, fmt.Sprintf("remote_queue.%s.retry_policy", provider), "none"))
+	assert.True(t, containsKV(inputs, fmt.Sprintf("remote_queue.%s.max_connections", provider), "10"))
+	assert.True(t, containsKV(inputs, fmt.Sprintf("remote_queue.%s.message_group_id", provider), "my-group"))
+	assert.True(t, containsKV(inputs, fmt.Sprintf("remote_queue.%s.timeout.connect", provider), "30"))
+	assert.True(t, containsKV(inputs, fmt.Sprintf("remote_queue.%s.timeout.read", provider), "60"))
+	assert.True(t, containsKV(inputs, fmt.Sprintf("remote_queue.%s.timeout.write", provider), "45"))
+	assert.True(t, containsKV(inputs, fmt.Sprintf("remote_queue.%s.timeout.receive_message", provider), "20"))
+	assert.True(t, containsKV(inputs, fmt.Sprintf("remote_queue.%s.timeout.visibility", provider), "300"))
+	assert.True(t, containsKV(inputs, fmt.Sprintf("remote_queue.%s.buffer.visibility", provider), "120"))
+	assert.True(t, containsKV(inputs, fmt.Sprintf("remote_queue.%s.executor_max_workers_count", provider), "4"))
+	assert.True(t, containsKV(inputs, fmt.Sprintf("remote_queue.%s.min_pending_messages", provider), "100"))
+	assert.True(t, containsKV(inputs, fmt.Sprintf("remote_queue.%s.renew_retries", provider), "3"))
+	assert.True(t, containsKV(inputs, fmt.Sprintf("remote_queue.%s.dead_letter_queue.process_interval", provider), "2d"))
+
+	// Verify S3/large_message_store fields in inputs
+	assert.True(t, containsKV(inputs, fmt.Sprintf("remote_queue.%s.large_message_store.sslVerifyServerCert", provider), "true"))
+	assert.True(t, containsKV(inputs, fmt.Sprintf("remote_queue.%s.large_message_store.sslVersions", provider), "tls1.2"))
+	assert.True(t, containsKV(inputs, fmt.Sprintf("remote_queue.%s.large_message_store.sslCommonNameToCheck", provider), "*.example.com"))
+	assert.True(t, containsKV(inputs, fmt.Sprintf("remote_queue.%s.large_message_store.sslAltNameToCheck", provider), "alt.example.com"))
+	assert.True(t, containsKV(inputs, fmt.Sprintf("remote_queue.%s.large_message_store.sslRootCAPath", provider), "/opt/splunk/etc/auth/ca.pem"))
+	assert.True(t, containsKV(inputs, fmt.Sprintf("remote_queue.%s.large_message_store.cipherSuite", provider), "ECDHE-RSA-AES256-GCM-SHA384"))
+	assert.True(t, containsKV(inputs, fmt.Sprintf("remote_queue.%s.large_message_store.ecdhCurves", provider), "prime256v1"))
+	assert.True(t, containsKV(inputs, fmt.Sprintf("remote_queue.%s.large_message_store.dhFile", provider), "/opt/splunk/etc/auth/dh.pem"))
+	assert.True(t, containsKV(inputs, fmt.Sprintf("remote_queue.%s.large_message_store.encryption_scheme", provider), "SSE-KMS"))
+	assert.True(t, containsKV(inputs, fmt.Sprintf("remote_queue.%s.large_message_store.kms_endpoint", provider), "https://kms.us-west-2.amazonaws.com"))
+	assert.True(t, containsKV(inputs, fmt.Sprintf("remote_queue.%s.large_message_store.key_id", provider), "my-key-id"))
+	assert.True(t, containsKV(inputs, fmt.Sprintf("remote_queue.%s.large_message_store.key_refresh_interval", provider), "1d"))
+
+	// Verify outputs-only fields
+	assert.True(t, containsKV(outputs, fmt.Sprintf("remote_queue.%s.send_interval", provider), "10s"))
+	assert.True(t, containsKV(outputs, fmt.Sprintf("remote_queue.%s.encoding_format", provider), "json"))
+
+	// send_interval and encoding_format should NOT be in inputs (they are outputs-only for indexers)
+	assert.False(t, containsKV(inputs, fmt.Sprintf("remote_queue.%s.send_interval", provider), "10s"))
+	assert.False(t, containsKV(inputs, fmt.Sprintf("remote_queue.%s.encoding_format", provider), "json"))
+
+	// outputs should contain all inputs fields too
+	assert.True(t, containsKV(outputs, fmt.Sprintf("remote_queue.%s.max_connections", provider), "10"))
+	assert.True(t, containsKV(outputs, fmt.Sprintf("remote_queue.%s.large_message_store.sslVerifyServerCert", provider), "true"))
+}
+
 func TestUpdateIndexerConfFiles(t *testing.T) {
 	c := spltest.NewMockClient()
 	ctx := context.TODO()

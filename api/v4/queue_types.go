@@ -25,11 +25,6 @@ const (
 	QueuePausedAnnotation = "queue.enterprise.splunk.com/paused"
 )
 
-// +kubebuilder:validation:XValidation:rule="self.provider == oldSelf.provider",message="provider is immutable once created"
-// +kubebuilder:validation:XValidation:rule="self.sqs.name == oldSelf.sqs.name",message="sqs.name is immutable once created"
-// +kubebuilder:validation:XValidation:rule="self.sqs.authRegion == oldSelf.sqs.authRegion",message="sqs.authRegion is immutable once created"
-// +kubebuilder:validation:XValidation:rule="self.sqs.dlq == oldSelf.sqs.dlq",message="sqs.dlq is immutable once created"
-// +kubebuilder:validation:XValidation:rule="self.sqs.endpoint == oldSelf.sqs.endpoint",message="sqs.endpoint is immutable once created"
 // +kubebuilder:validation:XValidation:rule="(self.provider != 'sqs' && self.provider != 'sqs_cp') || has(self.sqs)",message="sqs must be provided when provider is sqs or sqs_cp"
 // QueueSpec defines the desired state of Queue
 type QueueSpec struct {
@@ -67,6 +62,71 @@ type SQSSpec struct {
 	// +optional
 	// List of remote storage volumes
 	VolList []VolumeSpec `json:"volumes,omitempty"`
+
+	// +optional
+	// Maximum number of connections to the SQS service
+	MaxConnections *int32 `json:"maxConnections,omitempty"`
+
+	// +optional
+	// Message group ID for FIFO queues
+	MessageGroupID string `json:"messageGroupID,omitempty"`
+
+	// +optional
+	// +kubebuilder:validation:Enum=max_count;none
+	// Retry policy for failed messages
+	RetryPolicy string `json:"retryPolicy,omitempty"`
+
+	// +optional
+	// Maximum retries per part when retry_policy is max_count
+	MaxRetriesPerPart *int32 `json:"maxRetriesPerPart,omitempty"`
+
+	// +optional
+	// Connection timeout in seconds
+	TimeoutConnect *int32 `json:"timeoutConnect,omitempty"`
+
+	// +optional
+	// Read timeout in seconds
+	TimeoutRead *int32 `json:"timeoutRead,omitempty"`
+
+	// +optional
+	// Write timeout in seconds
+	TimeoutWrite *int32 `json:"timeoutWrite,omitempty"`
+
+	// +optional
+	// Receive message timeout in seconds
+	TimeoutReceiveMessage *int32 `json:"timeoutReceiveMessage,omitempty"`
+
+	// +optional
+	// Visibility timeout in seconds
+	TimeoutVisibility *int32 `json:"timeoutVisibility,omitempty"`
+
+	// +optional
+	// Buffer visibility in seconds
+	BufferVisibility *int32 `json:"bufferVisibility,omitempty"`
+
+	// +optional
+	// Maximum number of executor worker threads
+	ExecutorMaxWorkersCount *int32 `json:"executorMaxWorkersCount,omitempty"`
+
+	// +optional
+	// Minimum number of pending messages before sending
+	MinPendingMessages *int32 `json:"minPendingMessages,omitempty"`
+
+	// +optional
+	// Number of retries for renewing message visibility
+	RenewRetries *int32 `json:"renewRetries,omitempty"`
+
+	// +optional
+	// Encoding format for messages (e.g. "s2s")
+	EncodingFormat string `json:"encodingFormat,omitempty"`
+
+	// +optional
+	// Interval between send operations (e.g. "5s")
+	SendInterval string `json:"sendInterval,omitempty"`
+
+	// +optional
+	// Dead letter queue process interval (e.g. "1d")
+	DLQProcessInterval string `json:"dlqProcessInterval,omitempty"`
 }
 
 // QueueStatus defines the observed state of Queue

@@ -67,18 +67,80 @@ spec:
                     description: Auth Region of the resources
                     pattern: ^(?:us|ap|eu|me|af|sa|ca|cn|il)(?:-[a-z]+){1,3}-\d$
                     type: string
+                  bufferVisibility:
+                    description: Buffer visibility in seconds
+                    format: int32
+                    type: integer
                   dlq:
                     description: Name of the dead letter queue resource
                     minLength: 1
+                    type: string
+                  dlqProcessInterval:
+                    description: Dead letter queue process interval (e.g. "1d")
+                    type: string
+                  encodingFormat:
+                    description: Encoding format for messages (e.g. "s2s")
                     type: string
                   endpoint:
                     description: Amazon SQS Service endpoint
                     pattern: ^https?://[^\s/$.?#].[^\s]*$
                     type: string
+                  executorMaxWorkersCount:
+                    description: Maximum number of executor worker threads
+                    format: int32
+                    type: integer
+                  maxConnections:
+                    description: Maximum number of connections to the SQS service
+                    format: int32
+                    type: integer
+                  maxRetriesPerPart:
+                    description: Maximum retries per part when retry_policy is max_count
+                    format: int32
+                    type: integer
+                  messageGroupID:
+                    description: Message group ID for FIFO queues
+                    type: string
+                  minPendingMessages:
+                    description: Minimum number of pending messages before sending
+                    format: int32
+                    type: integer
                   name:
                     description: Name of the queue
                     minLength: 1
                     type: string
+                  renewRetries:
+                    description: Number of retries for renewing message visibility
+                    format: int32
+                    type: integer
+                  retryPolicy:
+                    description: Retry policy for failed messages
+                    enum:
+                    - max_count
+                    - none
+                    type: string
+                  sendInterval:
+                    description: Interval between send operations (e.g. "5s")
+                    type: string
+                  timeoutConnect:
+                    description: Connection timeout in seconds
+                    format: int32
+                    type: integer
+                  timeoutRead:
+                    description: Read timeout in seconds
+                    format: int32
+                    type: integer
+                  timeoutReceiveMessage:
+                    description: Receive message timeout in seconds
+                    format: int32
+                    type: integer
+                  timeoutVisibility:
+                    description: Visibility timeout in seconds
+                    format: int32
+                    type: integer
+                  timeoutWrite:
+                    description: Write timeout in seconds
+                    format: int32
+                    type: integer
                   volumes:
                     description: List of remote storage volumes
                     items:
@@ -121,16 +183,6 @@ spec:
             - sqs
             type: object
             x-kubernetes-validations:
-            - message: provider is immutable once created
-              rule: self.provider == oldSelf.provider
-            - message: sqs.name is immutable once created
-              rule: self.sqs.name == oldSelf.sqs.name
-            - message: sqs.authRegion is immutable once created
-              rule: self.sqs.authRegion == oldSelf.sqs.authRegion
-            - message: sqs.dlq is immutable once created
-              rule: self.sqs.dlq == oldSelf.sqs.dlq
-            - message: sqs.endpoint is immutable once created
-              rule: self.sqs.endpoint == oldSelf.sqs.endpoint
             - message: sqs must be provided when provider is sqs or sqs_cp
               rule: (self.provider != 'sqs' && self.provider != 'sqs_cp') || has(self.sqs)
           status:

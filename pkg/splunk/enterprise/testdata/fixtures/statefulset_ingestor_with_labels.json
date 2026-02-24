@@ -81,7 +81,7 @@
             "command": [
               "bash",
               "-c",
-              "mkdir-p/opt/splk/etc/apps/100-sok-ingestorcluster/local&&mkdir-p/opt/splk/etc/apps/100-sok-ingestorcluster/metadata&&ln-sfn/mnt/splunk-queue-config/app.conf/opt/splk/etc/apps/100-sok-ingestorcluster/local/app.conf&&ln-sfn/mnt/splunk-queue-config/outputs.conf/opt/splk/etc/apps/100-sok-ingestorcluster/local/outputs.conf&&ln-sfn/mnt/splunk-queue-config/default-mode.conf/opt/splk/etc/apps/100-sok-ingestorcluster/local/default-mode.conf&&ln-sfn/mnt/splunk-queue-config/local.meta/opt/splk/etc/apps/100-sok-ingestorcluster/metadata/local.meta"
+              "mkdir-p/opt/splk/etc/apps/100-sok-ingestorcluster/local&&mkdir-p/opt/splk/etc/apps/100-sok-ingestorcluster/metadata&&ln-sfn/mnt/splunk-queue-config/app.conf/opt/splk/etc/apps/100-sok-ingestorcluster/local/app.conf&&ln-sfn/mnt/splunk-queue-config/outputs.conf/opt/splk/etc/apps/100-sok-ingestorcluster/local/outputs.conf&&ln-sfn/mnt/splunk-queue-config/default-mode.conf/opt/splk/etc/apps/100-sok-ingestorcluster/local/default-mode.conf&&cp/mnt/splunk-queue-config/local.meta/opt/splk/etc/apps/100-sok-ingestorcluster/metadata/local.meta"
             ],
             "resources": {
               "limits": {

@@ -16,6 +16,7 @@ package enterprise
 
 import (
 	"context"
+	"crypto/sha256"
 	"fmt"
 	"reflect"
 	"strings"
@@ -189,7 +190,7 @@ func ApplyIngestorCluster(ctx context.Context, client client.Client, cr *enterpr
 	}
 
 	// Build and apply the ingestor queue config ConfigMap
-	err = buildAndApplyIngestorQueueConfigMap(ctx, client, cr, qosCfg)
+	configMapChanged, err := buildAndApplyIngestorQueueConfigMap(ctx, client, cr, qosCfg)
 	if err != nil {
 		scopedLog.Error(err, "Failed to build/apply ingestor queue config ConfigMap")
 		eventPublisher.Warning(ctx, "buildAndApplyIngestorQueueConfigMap", fmt.Sprintf("build/apply ingestor queue config configmap failed %s", err.Error()))
@@ -232,6 +233,15 @@ func ApplyIngestorCluster(ctx context.Context, client client.Client, cr *enterpr
 			_, err = ApplyMonitoringConsoleEnvConfigMap(ctx, client, cr.GetNamespace(), cr.GetName(), cr.Spec.MonitoringConsoleRef.Name, make([]corev1.EnvVar, 0), true)
 			if err != nil {
 				eventPublisher.Warning(ctx, "ApplyMonitoringConsoleEnvConfigMap", fmt.Sprintf("apply monitoring console environment config map failed %s", err.Error()))
+				return result, err
+			}
+		}
+
+		// If ConfigMap content changed, reload the ingestor app on all pods
+		if configMapChanged {
+			err = reloadIngestorApp(ctx, client, cr)
+			if err != nil {
+				eventPublisher.Warning(ctx, "reloadIngestorApp", fmt.Sprintf("reload ingestor app failed %s", err.Error()))
 				return result, err
 			}
 		}
@@ -280,15 +290,14 @@ func validateIngestorClusterSpec(ctx context.Context, c splcommon.ControllerClie
 
 // getIngestorStatefulSet returns a Kubernetes StatefulSet object for Splunk Enterprise ingestors
 func getIngestorStatefulSet(ctx context.Context, client splcommon.ControllerClient, cr *enterpriseApi.IngestorCluster) (*appsv1.StatefulSet, error) {
-	reqLogger := log.FromContext(ctx)
-	scopedLog := reqLogger.WithName("getIngestorStatefulSet")
-
 	ss, err := getSplunkStatefulSet(ctx, client, cr, &cr.Spec.CommonSplunkSpec, SplunkIngestor, cr.Spec.Replicas, []corev1.EnvVar{})
 	if err != nil {
 		return nil, err
 	}
 
-	// Mount the ingestor queue config ConfigMap volume
+	// Mount the ingestor queue config ConfigMap volume.
+	// ConfigMap is mounted directly (non-subPath), so Kubernetes propagates
+	// content updates in-place via atomic symlink swap — no pod roll needed.
 	configMapName := GetIngestorQueueConfigMapName(cr.GetName())
 	configMapVolDefaultMode := corev1.ConfigMapVolumeSourceDefaultMode
 	addSplunkVolumeToTemplate(&ss.Spec.Template, "mnt-splunk-queue-config", ingestorQueueConfigMountPath, corev1.VolumeSource{
@@ -299,15 +308,6 @@ func getIngestorStatefulSet(ctx context.Context, client splcommon.ControllerClie
 			DefaultMode: &configMapVolDefaultMode,
 		},
 	})
-
-	// Set annotation to track ConfigMap resource version for pod rolling updates
-	namespacedName := types.NamespacedName{Namespace: cr.GetNamespace(), Name: configMapName}
-	configMapResourceVersion, err := splctrl.GetConfigMapResourceVersion(ctx, client, namespacedName)
-	if err == nil {
-		ss.Spec.Template.ObjectMeta.Annotations[ingestorQueueConfigRevAnnotation] = configMapResourceVersion
-	} else {
-		scopedLog.Error(err, "Failed to get ingestor queue config ConfigMap resource version for annotation")
-	}
 
 	// Add init container to create app directory structure and symlink config files
 	setupIngestorInitContainer(&ss.Spec.Template, cr.Spec.Image, cr.Spec.ImagePullPolicy, commandForIngestorQueueConfig, cr.Spec.EtcVolumeStorageConfig.EphemeralStorage)
@@ -334,7 +334,9 @@ func getPipelineInputsForConfFile(isIndexer bool) (config [][]string) {
 	return
 }
 
-// getQueueAndObjectStorageInputsForConfFiles returns a list of queue and object storage inputs for conf files
+// getQueueAndObjectStorageInputsForIngestorConfFiles returns a list of queue and object storage inputs for conf files.
+// Previously hardcoded values (encoding_format, retry_policy, max_retries_per_part, send_interval) use the CRD value
+// if set, otherwise fall back to the previous hardcoded defaults for backward compatibility.
 func getQueueAndObjectStorageInputsForIngestorConfFiles(queue *enterpriseApi.QueueSpec, os *enterpriseApi.ObjectStorageSpec, accessKey, secretKey string) (config [][]string) {
 	queueProvider := ""
 	authRegion := ""
@@ -367,6 +369,7 @@ func getQueueAndObjectStorageInputsForIngestorConfFiles(queue *enterpriseApi.Que
 		}
 	}
 
+	// Always-emitted fields
 	config = append(config,
 		[]string{"remote_queue.type", queueProvider},
 		[]string{fmt.Sprintf("remote_queue.%s.auth_region", queueProvider), authRegion},
@@ -374,12 +377,113 @@ func getQueueAndObjectStorageInputsForIngestorConfFiles(queue *enterpriseApi.Que
 		[]string{fmt.Sprintf("remote_queue.%s.large_message_store.endpoint", osProvider), osEndpoint},
 		[]string{fmt.Sprintf("remote_queue.%s.large_message_store.path", osProvider), path},
 		[]string{fmt.Sprintf("remote_queue.%s.dead_letter_queue.name", queueProvider), dlq},
-		[]string{fmt.Sprintf("remote_queue.%s.encoding_format", queueProvider), "s2s"},
-		[]string{fmt.Sprintf("remote_queue.%s.max_count.max_retries_per_part", queueProvider), "4"},
-		[]string{fmt.Sprintf("remote_queue.%s.retry_policy", queueProvider), "max_count"},
-		[]string{fmt.Sprintf("remote_queue.%s.send_interval", queueProvider), "5s"},
 	)
 
+	// encoding_format: CRD value or default "s2s"
+	encodingFormat := "s2s"
+	if queue.SQS.EncodingFormat != "" {
+		encodingFormat = queue.SQS.EncodingFormat
+	}
+	config = append(config, []string{fmt.Sprintf("remote_queue.%s.encoding_format", queueProvider), encodingFormat})
+
+	// max_retries_per_part: CRD value or default "4"
+	maxRetries := "4"
+	if queue.SQS.MaxRetriesPerPart != nil {
+		maxRetries = fmt.Sprintf("%d", *queue.SQS.MaxRetriesPerPart)
+	}
+	config = append(config, []string{fmt.Sprintf("remote_queue.%s.max_count.max_retries_per_part", queueProvider), maxRetries})
+
+	// retry_policy: CRD value or default "max_count"
+	retryPolicy := "max_count"
+	if queue.SQS.RetryPolicy != "" {
+		retryPolicy = queue.SQS.RetryPolicy
+	}
+	config = append(config, []string{fmt.Sprintf("remote_queue.%s.retry_policy", queueProvider), retryPolicy})
+
+	// send_interval: CRD value or default "5s"
+	sendInterval := "5s"
+	if queue.SQS.SendInterval != "" {
+		sendInterval = queue.SQS.SendInterval
+	}
+	config = append(config, []string{fmt.Sprintf("remote_queue.%s.send_interval", queueProvider), sendInterval})
+
+	// Optional SQS fields — only emitted when set
+	if queue.SQS.MaxConnections != nil {
+		config = append(config, []string{fmt.Sprintf("remote_queue.%s.max_connections", queueProvider), fmt.Sprintf("%d", *queue.SQS.MaxConnections)})
+	}
+	if queue.SQS.MessageGroupID != "" {
+		config = append(config, []string{fmt.Sprintf("remote_queue.%s.message_group_id", queueProvider), queue.SQS.MessageGroupID})
+	}
+	if queue.SQS.TimeoutConnect != nil {
+		config = append(config, []string{fmt.Sprintf("remote_queue.%s.timeout.connect", queueProvider), fmt.Sprintf("%d", *queue.SQS.TimeoutConnect)})
+	}
+	if queue.SQS.TimeoutRead != nil {
+		config = append(config, []string{fmt.Sprintf("remote_queue.%s.timeout.read", queueProvider), fmt.Sprintf("%d", *queue.SQS.TimeoutRead)})
+	}
+	if queue.SQS.TimeoutWrite != nil {
+		config = append(config, []string{fmt.Sprintf("remote_queue.%s.timeout.write", queueProvider), fmt.Sprintf("%d", *queue.SQS.TimeoutWrite)})
+	}
+	if queue.SQS.TimeoutReceiveMessage != nil {
+		config = append(config, []string{fmt.Sprintf("remote_queue.%s.timeout.receive_message", queueProvider), fmt.Sprintf("%d", *queue.SQS.TimeoutReceiveMessage)})
+	}
+	if queue.SQS.TimeoutVisibility != nil {
+		config = append(config, []string{fmt.Sprintf("remote_queue.%s.timeout.visibility", queueProvider), fmt.Sprintf("%d", *queue.SQS.TimeoutVisibility)})
+	}
+	if queue.SQS.BufferVisibility != nil {
+		config = append(config, []string{fmt.Sprintf("remote_queue.%s.buffer.visibility", queueProvider), fmt.Sprintf("%d", *queue.SQS.BufferVisibility)})
+	}
+	if queue.SQS.ExecutorMaxWorkersCount != nil {
+		config = append(config, []string{fmt.Sprintf("remote_queue.%s.executor_max_workers_count", queueProvider), fmt.Sprintf("%d", *queue.SQS.ExecutorMaxWorkersCount)})
+	}
+	if queue.SQS.MinPendingMessages != nil {
+		config = append(config, []string{fmt.Sprintf("remote_queue.%s.min_pending_messages", queueProvider), fmt.Sprintf("%d", *queue.SQS.MinPendingMessages)})
+	}
+	if queue.SQS.RenewRetries != nil {
+		config = append(config, []string{fmt.Sprintf("remote_queue.%s.renew_retries", queueProvider), fmt.Sprintf("%d", *queue.SQS.RenewRetries)})
+	}
+	if queue.SQS.DLQProcessInterval != "" {
+		config = append(config, []string{fmt.Sprintf("remote_queue.%s.dead_letter_queue.process_interval", queueProvider), queue.SQS.DLQProcessInterval})
+	}
+
+	// Optional S3/large_message_store fields — only emitted when set
+	if os.S3.SSLVerifyServerCert != nil {
+		config = append(config, []string{fmt.Sprintf("remote_queue.%s.large_message_store.sslVerifyServerCert", osProvider), fmt.Sprintf("%t", *os.S3.SSLVerifyServerCert)})
+	}
+	if os.S3.SSLVersions != "" {
+		config = append(config, []string{fmt.Sprintf("remote_queue.%s.large_message_store.sslVersions", osProvider), os.S3.SSLVersions})
+	}
+	if os.S3.SSLCommonNameToCheck != "" {
+		config = append(config, []string{fmt.Sprintf("remote_queue.%s.large_message_store.sslCommonNameToCheck", osProvider), os.S3.SSLCommonNameToCheck})
+	}
+	if os.S3.SSLAltNameToCheck != "" {
+		config = append(config, []string{fmt.Sprintf("remote_queue.%s.large_message_store.sslAltNameToCheck", osProvider), os.S3.SSLAltNameToCheck})
+	}
+	if os.S3.SSLRootCAPath != "" {
+		config = append(config, []string{fmt.Sprintf("remote_queue.%s.large_message_store.sslRootCAPath", osProvider), os.S3.SSLRootCAPath})
+	}
+	if os.S3.CipherSuite != "" {
+		config = append(config, []string{fmt.Sprintf("remote_queue.%s.large_message_store.cipherSuite", osProvider), os.S3.CipherSuite})
+	}
+	if os.S3.ECDHCurves != "" {
+		config = append(config, []string{fmt.Sprintf("remote_queue.%s.large_message_store.ecdhCurves", osProvider), os.S3.ECDHCurves})
+	}
+	if os.S3.DHFile != "" {
+		config = append(config, []string{fmt.Sprintf("remote_queue.%s.large_message_store.dhFile", osProvider), os.S3.DHFile})
+	}
+	if os.S3.EncryptionScheme != "" {
+		config = append(config, []string{fmt.Sprintf("remote_queue.%s.large_message_store.encryption_scheme", osProvider), os.S3.EncryptionScheme})
+	}
+	if os.S3.KMSEndpoint != "" {
+		config = append(config, []string{fmt.Sprintf("remote_queue.%s.large_message_store.kms_endpoint", osProvider), os.S3.KMSEndpoint})
+	}
+	if os.S3.KeyID != "" {
+		config = append(config, []string{fmt.Sprintf("remote_queue.%s.large_message_store.key_id", osProvider), os.S3.KeyID})
+	}
+	if os.S3.KeyRefreshInterval != "" {
+		config = append(config, []string{fmt.Sprintf("remote_queue.%s.large_message_store.key_refresh_interval", osProvider), os.S3.KeyRefreshInterval})
+	}
+
+	// Credentials
 	if accessKey != "" && secretKey != "" {
 		config = append(config, []string{fmt.Sprintf("remote_queue.%s.access_key", queueProvider), accessKey})
 		config = append(config, []string{fmt.Sprintf("remote_queue.%s.secret_key", queueProvider), secretKey})
@@ -405,12 +509,25 @@ description = Operator-managed queue and pipeline configuration for IngestorClus
 `
 }
 
-// generateIngestorLocalMeta returns the local.meta content for the ingestor queue config app
-func generateIngestorLocalMeta() string {
-	return `[]
+// generateIngestorLocalMeta returns the local.meta content for the ingestor queue config app.
+// The confChecksum is embedded as install_source_checksum so Splunk detects content changes on reload.
+func generateIngestorLocalMeta(confChecksum string) string {
+	return fmt.Sprintf(`[]
 access = read : [ * ], write : [ admin ]
 export = system
-`
+
+[app/install/install_source_checksum]
+data = %s
+`, confChecksum)
+}
+
+// computeIngestorConfChecksum returns a deterministic SHA-256 hex digest of the conf content.
+// It changes only when the actual conf file content changes.
+func computeIngestorConfChecksum(outputsConf, defaultModeConf string) string {
+	h := sha256.New()
+	h.Write([]byte(outputsConf))
+	h.Write([]byte(defaultModeConf))
+	return fmt.Sprintf("%x", h.Sum(nil))
 }
 
 // generateIngestorOutputsConf converts queue/OS specs to INI format outputs.conf string
@@ -438,9 +555,14 @@ func generateIngestorDefaultModeConf() string {
 	return b.String()
 }
 
-// buildAndApplyIngestorQueueConfigMap builds and applies the ConfigMap containing ingestor queue config app files
-func buildAndApplyIngestorQueueConfigMap(ctx context.Context, client splcommon.ControllerClient, cr *enterpriseApi.IngestorCluster, qosCfg *QueueOSConfig) error {
+// buildAndApplyIngestorQueueConfigMap builds and applies the ConfigMap containing ingestor queue config app files.
+// Returns (true, nil) when ConfigMap data changed, (false, nil) when unchanged.
+func buildAndApplyIngestorQueueConfigMap(ctx context.Context, client splcommon.ControllerClient, cr *enterpriseApi.IngestorCluster, qosCfg *QueueOSConfig) (bool, error) {
 	configMapName := GetIngestorQueueConfigMapName(cr.GetName())
+
+	outputsConf := generateIngestorOutputsConf(&qosCfg.Queue, &qosCfg.OS, qosCfg.AccessKey, qosCfg.SecretKey)
+	defaultModeConf := generateIngestorDefaultModeConf()
+	confChecksum := computeIngestorConfChecksum(outputsConf, defaultModeConf)
 
 	configMap := &corev1.ConfigMap{
 		ObjectMeta: metav1.ObjectMeta{
@@ -452,14 +574,43 @@ func buildAndApplyIngestorQueueConfigMap(ctx context.Context, client splcommon.C
 		},
 		Data: map[string]string{
 			"app.conf":          generateIngestorAppConf(),
-			"local.meta":        generateIngestorLocalMeta(),
-			"outputs.conf":      generateIngestorOutputsConf(&qosCfg.Queue, &qosCfg.OS, qosCfg.AccessKey, qosCfg.SecretKey),
-			"default-mode.conf": generateIngestorDefaultModeConf(),
+			"local.meta":        generateIngestorLocalMeta(confChecksum),
+			"outputs.conf":      outputsConf,
+			"default-mode.conf": defaultModeConf,
 		},
 	}
 
-	_, err := splctrl.ApplyConfigMap(ctx, client, configMap)
-	return err
+	return splctrl.ApplyConfigMap(ctx, client, configMap)
+}
+
+// reloadIngestorApp triggers a Splunk app reload on every ingestor pod so that
+// updated conf files (via ConfigMap) are picked up without a full pod restart.
+// Two separate exec calls are used (matching the addTelApp pattern) because
+// runCustomCommandOnSplunkPods pipes the command to /bin/sh via stdin.
+var reloadIngestorApp = func(ctx context.Context, client splcommon.ControllerClient, cr *enterpriseApi.IngestorCluster) error {
+	reqLogger := log.FromContext(ctx)
+	scopedLog := reqLogger.WithName("reloadIngestorApp").WithValues(
+		"name", cr.GetName(),
+		"namespace", cr.GetNamespace())
+
+	podExecClient := splutil.GetPodExecClient(client, cr, "")
+
+	// Step 1: Copy fresh local.meta from ConfigMap mount
+	err := runCustomCommandOnSplunkPods(ctx, cr, cr.Spec.Replicas, ingestorQueueConfigCopyMetaString, podExecClient)
+	if err != nil {
+		scopedLog.Error(err, "Failed to copy local.meta on ingestor pods")
+		return err
+	}
+
+	// Step 2: POST to _reload endpoint
+	err = runCustomCommandOnSplunkPods(ctx, cr, cr.Spec.Replicas, ingestorQueueConfigReloadString, podExecClient)
+	if err != nil {
+		scopedLog.Error(err, "Failed to reload ingestor app on pods")
+		return err
+	}
+
+	scopedLog.Info("Successfully triggered app reload on ingestor pods")
+	return nil
 }
 
 // setupIngestorInitContainer adds an init container with both the etc volume and

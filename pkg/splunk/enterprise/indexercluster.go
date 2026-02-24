@@ -1394,7 +1394,10 @@ func imageUpdatedTo9(previousImage string, currentImage string) bool {
 	return strings.HasPrefix(previousVersion, "8") && strings.HasPrefix(currentVersion, "9")
 }
 
-// getQueueAndObjectStorageInputsForIndexerConfFiles returns a list of queue and object storage inputs for conf files
+// getQueueAndObjectStorageInputsForIndexerConfFiles returns a list of queue and object storage inputs for conf files.
+// Previously hardcoded values (retry_policy, max_retries_per_part, send_interval, encoding_format) use the CRD value
+// if set, otherwise fall back to the previous hardcoded defaults for backward compatibility.
+// The outputs slice includes all inputs plus send_interval and encoding_format (outputs.conf-only settings for indexers).
 func getQueueAndObjectStorageInputsForIndexerConfFiles(queue *enterpriseApi.QueueSpec, os *enterpriseApi.ObjectStorageSpec, accessKey, secretKey string) (inputs, outputs [][]string) {
 	queueProvider := ""
 	authRegion := ""
@@ -1427,6 +1430,7 @@ func getQueueAndObjectStorageInputsForIndexerConfFiles(queue *enterpriseApi.Queu
 		}
 	}
 
+	// Always-emitted fields
 	inputs = append(inputs,
 		[]string{"remote_queue.type", queueProvider},
 		[]string{fmt.Sprintf("remote_queue.%s.auth_region", queueProvider), authRegion},
@@ -1434,21 +1438,121 @@ func getQueueAndObjectStorageInputsForIndexerConfFiles(queue *enterpriseApi.Queu
 		[]string{fmt.Sprintf("remote_queue.%s.large_message_store.endpoint", osProvider), osEndpoint},
 		[]string{fmt.Sprintf("remote_queue.%s.large_message_store.path", osProvider), path},
 		[]string{fmt.Sprintf("remote_queue.%s.dead_letter_queue.name", queueProvider), dlq},
-		[]string{fmt.Sprintf("remote_queue.%s.max_count.max_retries_per_part", queueProvider), "4"},
-		[]string{fmt.Sprintf("remote_queue.%s.retry_policy", queueProvider), "max_count"},
 	)
 
-	// TODO: Handle credentials change
+	// max_retries_per_part: CRD value or default "4"
+	maxRetries := "4"
+	if queue.SQS.MaxRetriesPerPart != nil {
+		maxRetries = fmt.Sprintf("%d", *queue.SQS.MaxRetriesPerPart)
+	}
+	inputs = append(inputs, []string{fmt.Sprintf("remote_queue.%s.max_count.max_retries_per_part", queueProvider), maxRetries})
+
+	// retry_policy: CRD value or default "max_count"
+	retryPolicy := "max_count"
+	if queue.SQS.RetryPolicy != "" {
+		retryPolicy = queue.SQS.RetryPolicy
+	}
+	inputs = append(inputs, []string{fmt.Sprintf("remote_queue.%s.retry_policy", queueProvider), retryPolicy})
+
+	// Optional SQS fields — only emitted when set
+	if queue.SQS.MaxConnections != nil {
+		inputs = append(inputs, []string{fmt.Sprintf("remote_queue.%s.max_connections", queueProvider), fmt.Sprintf("%d", *queue.SQS.MaxConnections)})
+	}
+	if queue.SQS.MessageGroupID != "" {
+		inputs = append(inputs, []string{fmt.Sprintf("remote_queue.%s.message_group_id", queueProvider), queue.SQS.MessageGroupID})
+	}
+	if queue.SQS.TimeoutConnect != nil {
+		inputs = append(inputs, []string{fmt.Sprintf("remote_queue.%s.timeout.connect", queueProvider), fmt.Sprintf("%d", *queue.SQS.TimeoutConnect)})
+	}
+	if queue.SQS.TimeoutRead != nil {
+		inputs = append(inputs, []string{fmt.Sprintf("remote_queue.%s.timeout.read", queueProvider), fmt.Sprintf("%d", *queue.SQS.TimeoutRead)})
+	}
+	if queue.SQS.TimeoutWrite != nil {
+		inputs = append(inputs, []string{fmt.Sprintf("remote_queue.%s.timeout.write", queueProvider), fmt.Sprintf("%d", *queue.SQS.TimeoutWrite)})
+	}
+	if queue.SQS.TimeoutReceiveMessage != nil {
+		inputs = append(inputs, []string{fmt.Sprintf("remote_queue.%s.timeout.receive_message", queueProvider), fmt.Sprintf("%d", *queue.SQS.TimeoutReceiveMessage)})
+	}
+	if queue.SQS.TimeoutVisibility != nil {
+		inputs = append(inputs, []string{fmt.Sprintf("remote_queue.%s.timeout.visibility", queueProvider), fmt.Sprintf("%d", *queue.SQS.TimeoutVisibility)})
+	}
+	if queue.SQS.BufferVisibility != nil {
+		inputs = append(inputs, []string{fmt.Sprintf("remote_queue.%s.buffer.visibility", queueProvider), fmt.Sprintf("%d", *queue.SQS.BufferVisibility)})
+	}
+	if queue.SQS.ExecutorMaxWorkersCount != nil {
+		inputs = append(inputs, []string{fmt.Sprintf("remote_queue.%s.executor_max_workers_count", queueProvider), fmt.Sprintf("%d", *queue.SQS.ExecutorMaxWorkersCount)})
+	}
+	if queue.SQS.MinPendingMessages != nil {
+		inputs = append(inputs, []string{fmt.Sprintf("remote_queue.%s.min_pending_messages", queueProvider), fmt.Sprintf("%d", *queue.SQS.MinPendingMessages)})
+	}
+	if queue.SQS.RenewRetries != nil {
+		inputs = append(inputs, []string{fmt.Sprintf("remote_queue.%s.renew_retries", queueProvider), fmt.Sprintf("%d", *queue.SQS.RenewRetries)})
+	}
+	if queue.SQS.DLQProcessInterval != "" {
+		inputs = append(inputs, []string{fmt.Sprintf("remote_queue.%s.dead_letter_queue.process_interval", queueProvider), queue.SQS.DLQProcessInterval})
+	}
+
+	// Optional S3/large_message_store fields — only emitted when set
+	if os.S3.SSLVerifyServerCert != nil {
+		inputs = append(inputs, []string{fmt.Sprintf("remote_queue.%s.large_message_store.sslVerifyServerCert", osProvider), fmt.Sprintf("%t", *os.S3.SSLVerifyServerCert)})
+	}
+	if os.S3.SSLVersions != "" {
+		inputs = append(inputs, []string{fmt.Sprintf("remote_queue.%s.large_message_store.sslVersions", osProvider), os.S3.SSLVersions})
+	}
+	if os.S3.SSLCommonNameToCheck != "" {
+		inputs = append(inputs, []string{fmt.Sprintf("remote_queue.%s.large_message_store.sslCommonNameToCheck", osProvider), os.S3.SSLCommonNameToCheck})
+	}
+	if os.S3.SSLAltNameToCheck != "" {
+		inputs = append(inputs, []string{fmt.Sprintf("remote_queue.%s.large_message_store.sslAltNameToCheck", osProvider), os.S3.SSLAltNameToCheck})
+	}
+	if os.S3.SSLRootCAPath != "" {
+		inputs = append(inputs, []string{fmt.Sprintf("remote_queue.%s.large_message_store.sslRootCAPath", osProvider), os.S3.SSLRootCAPath})
+	}
+	if os.S3.CipherSuite != "" {
+		inputs = append(inputs, []string{fmt.Sprintf("remote_queue.%s.large_message_store.cipherSuite", osProvider), os.S3.CipherSuite})
+	}
+	if os.S3.ECDHCurves != "" {
+		inputs = append(inputs, []string{fmt.Sprintf("remote_queue.%s.large_message_store.ecdhCurves", osProvider), os.S3.ECDHCurves})
+	}
+	if os.S3.DHFile != "" {
+		inputs = append(inputs, []string{fmt.Sprintf("remote_queue.%s.large_message_store.dhFile", osProvider), os.S3.DHFile})
+	}
+	if os.S3.EncryptionScheme != "" {
+		inputs = append(inputs, []string{fmt.Sprintf("remote_queue.%s.large_message_store.encryption_scheme", osProvider), os.S3.EncryptionScheme})
+	}
+	if os.S3.KMSEndpoint != "" {
+		inputs = append(inputs, []string{fmt.Sprintf("remote_queue.%s.large_message_store.kms_endpoint", osProvider), os.S3.KMSEndpoint})
+	}
+	if os.S3.KeyID != "" {
+		inputs = append(inputs, []string{fmt.Sprintf("remote_queue.%s.large_message_store.key_id", osProvider), os.S3.KeyID})
+	}
+	if os.S3.KeyRefreshInterval != "" {
+		inputs = append(inputs, []string{fmt.Sprintf("remote_queue.%s.large_message_store.key_refresh_interval", osProvider), os.S3.KeyRefreshInterval})
+	}
+
+	// Credentials
 	if accessKey != "" && secretKey != "" {
 		inputs = append(inputs, []string{fmt.Sprintf("remote_queue.%s.access_key", queueProvider), accessKey})
 		inputs = append(inputs, []string{fmt.Sprintf("remote_queue.%s.secret_key", queueProvider), secretKey})
 	}
 
-	outputs = inputs
-	outputs = append(outputs,
-		[]string{fmt.Sprintf("remote_queue.%s.send_interval", queueProvider), "5s"},
-		[]string{fmt.Sprintf("remote_queue.%s.encoding_format", queueProvider), "s2s"},
-	)
+	// outputs includes everything from inputs plus outputs.conf-only settings
+	outputs = make([][]string, len(inputs))
+	copy(outputs, inputs)
+
+	// send_interval: CRD value or default "5s"
+	sendInterval := "5s"
+	if queue.SQS.SendInterval != "" {
+		sendInterval = queue.SQS.SendInterval
+	}
+	outputs = append(outputs, []string{fmt.Sprintf("remote_queue.%s.send_interval", queueProvider), sendInterval})
+
+	// encoding_format: CRD value or default "s2s"
+	encodingFormat := "s2s"
+	if queue.SQS.EncodingFormat != "" {
+		encodingFormat = queue.SQS.EncodingFormat
+	}
+	outputs = append(outputs, []string{fmt.Sprintf("remote_queue.%s.encoding_format", queueProvider), encodingFormat})
 
 	return inputs, outputs
 }

@@ -145,6 +145,47 @@ spec:
     name: os
 ```
 
+## Configuration Management
+
+The operator manages IngestorCluster Splunk configuration through a Kubernetes ConfigMap and a Splunk app called `100-sok-ingestorcluster`. This section describes how configuration is delivered to pods and how changes are applied without restarting them.
+
+### App structure
+
+The operator creates a ConfigMap named `splunk-<name>-ingestor-queue-config` containing four files that form a Splunk app:
+
+```
+100-sok-ingestorcluster/
+  local/
+    app.conf            # App metadata (enabled, non-visible)
+    outputs.conf        # Queue and object storage settings from Queue/ObjectStorage CRs
+    default-mode.conf   # Pipeline stanzas (remote queue routing, typing, indexerPipe)
+  metadata/
+    local.meta          # ACLs + install_source_checksum for reload detection
+```
+
+An init container runs on each pod at startup to create the app directory structure under `/opt/splunk/etc/apps/`. The conf files (`app.conf`, `outputs.conf`, `default-mode.conf`) are symlinked from the ConfigMap mount at `/mnt/splunk-queue-config/`, so Kubernetes propagates content updates in-place. `local.meta` is copied (not symlinked) because Splunk writes its own metadata stanzas into this file at runtime, which would break a symlink to the read-only ConfigMap mount.
+
+### Reload on change
+
+When Queue or ObjectStorage configuration changes, the operator updates the ConfigMap and triggers an in-place reload rather than rolling all pods:
+
+1. The operator computes a SHA-256 checksum of `outputs.conf` + `default-mode.conf` and embeds it in `local.meta` as an `install_source_checksum` stanza.
+2. `ApplyConfigMap` compares the new ConfigMap data against the existing data in etcd and returns whether anything changed.
+3. If the data changed and the IngestorCluster is in `PhaseReady`, the operator executes two commands on each pod via `kubectl exec`:
+   - Copies the updated `local.meta` from the ConfigMap mount into the app's metadata directory.
+   - POSTs to `/services/apps/local/_reload` on `localhost:8089`, which causes Splunk to detect the changed `install_source_checksum` and reload the app's conf files.
+
+This avoids a full StatefulSet rolling restart for configuration-only changes. Pod restarts are only needed when the StatefulSet spec itself changes (image, resources, volumes, etc.).
+
+### Observability
+
+To verify the reload mechanism is working:
+
+- **Operator logs**: Look for `Successfully triggered app reload on ingestor pods` after a Queue/ObjectStorage change.
+- **Pod age**: Should remain unchanged after a config update (no restart).
+- **ConfigMap content**: `kubectl get configmap splunk-<name>-ingestor-queue-config -o jsonpath='{.data.local\.meta}'` should show the `install_source_checksum` stanza.
+- **Splunk access log**: Should show a `POST /services/apps/local/_reload` entry with a `200` response.
+
 # IndexerCluster
 
 IndexerCluster is enhanced to support index‑only mode enabling independent scaling, loss‑safe buffering, and simplified day‑0/day‑n management via Kubernetes CRDs. Its Splunk pods are configured to pull events from the queue (inputs.conf) and index them.

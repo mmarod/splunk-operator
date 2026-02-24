@@ -62,13 +62,53 @@ spec:
               s3:
                 description: s3 specific inputs
                 properties:
+                  cipherSuite:
+                    description: Cipher suite string for SSL connections
+                    type: string
+                  dhFile:
+                    description: Path to the Diffie-Hellman parameter file inside
+                      the Splunk container. Users must mount this file via volumes.
+                    type: string
+                  ecdhCurves:
+                    description: ECDH curves for SSL connections
+                    type: string
+                  encryptionScheme:
+                    description: Encryption scheme for data at rest (e.g. "SSE-S3",
+                      "SSE-KMS")
+                    type: string
                   endpoint:
                     description: S3-compatible Service endpoint
                     pattern: ^https?://[^\s/$.?#].[^\s]*$
                     type: string
+                  keyID:
+                    description: KMS key ID for encryption
+                    type: string
+                  keyRefreshInterval:
+                    description: Interval for refreshing the encryption key (e.g.
+                      "1d")
+                    type: string
+                  kmsEndpoint:
+                    description: KMS endpoint URL for encryption key management
+                    type: string
                   path:
                     description: S3 bucket path
                     pattern: ^(?:s3://)?[a-z0-9.-]{3,63}(?:/[^\s]+)?$
+                    type: string
+                  sslAltNameToCheck:
+                    description: Alternate name to check in the server's SSL certificate
+                    type: string
+                  sslCommonNameToCheck:
+                    description: Common name to check in the server's SSL certificate
+                    type: string
+                  sslRootCAPath:
+                    description: Path to the root CA certificate file inside the Splunk
+                      container. Users must mount this file via volumes.
+                    type: string
+                  sslVerifyServerCert:
+                    description: Whether to verify the server's SSL certificate
+                    type: boolean
+                  sslVersions:
+                    description: Comma-separated list of SSL versions to support
                     type: string
                 required:
                 - path
@@ -78,10 +118,6 @@ spec:
             - s3
             type: object
             x-kubernetes-validations:
-            - message: provider is immutable once created
-              rule: self.provider == oldSelf.provider
-            - message: s3 is immutable once created
-              rule: self.s3 == oldSelf.s3
             - message: s3 must be provided when provider is s3
               rule: self.provider != 's3' || has(self.s3)
           status:

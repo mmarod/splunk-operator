@@ -369,7 +369,7 @@ func TestGenerateIngestorOutputsConf(t *testing.T) {
 		},
 	}
 
-	// With credentials
+	// With credentials — backward compat: defaults match previous hardcoded values
 	conf := generateIngestorOutputsConf(queue, objStorage, "mykey", "mysecret")
 	assert.Contains(t, conf, "[remote_queue:test-queue]")
 	assert.Contains(t, conf, fmt.Sprintf("remote_queue.type = %s", provider))
@@ -379,6 +379,9 @@ func TestGenerateIngestorOutputsConf(t *testing.T) {
 	assert.Contains(t, conf, fmt.Sprintf("remote_queue.%s.large_message_store.path = s3://bucket/key", provider))
 	assert.Contains(t, conf, fmt.Sprintf("remote_queue.%s.dead_letter_queue.name = sqs-dlq-test", provider))
 	assert.Contains(t, conf, fmt.Sprintf("remote_queue.%s.encoding_format = s2s", provider))
+	assert.Contains(t, conf, fmt.Sprintf("remote_queue.%s.max_count.max_retries_per_part = 4", provider))
+	assert.Contains(t, conf, fmt.Sprintf("remote_queue.%s.retry_policy = max_count", provider))
+	assert.Contains(t, conf, fmt.Sprintf("remote_queue.%s.send_interval = 5s", provider))
 	assert.Contains(t, conf, fmt.Sprintf("remote_queue.%s.access_key = mykey", provider))
 	assert.Contains(t, conf, fmt.Sprintf("remote_queue.%s.secret_key = mysecret", provider))
 
@@ -386,6 +389,12 @@ func TestGenerateIngestorOutputsConf(t *testing.T) {
 	conf = generateIngestorOutputsConf(queue, objStorage, "", "")
 	assert.NotContains(t, conf, "access_key")
 	assert.NotContains(t, conf, "secret_key")
+
+	// Optional fields should not appear when not set
+	assert.NotContains(t, conf, "max_connections")
+	assert.NotContains(t, conf, "message_group_id")
+	assert.NotContains(t, conf, "timeout.connect")
+	assert.NotContains(t, conf, "sslVerifyServerCert")
 }
 
 func TestGenerateIngestorOutputsConfSQSCP(t *testing.T) {
@@ -415,6 +424,102 @@ func TestGenerateIngestorOutputsConfSQSCP(t *testing.T) {
 	assert.Contains(t, conf, fmt.Sprintf("remote_queue.%s.auth_region = us-west-2", provider))
 	assert.Contains(t, conf, fmt.Sprintf("remote_queue.%s.access_key = key", provider))
 	assert.Contains(t, conf, fmt.Sprintf("remote_queue.%s.secret_key = secret", provider))
+}
+
+func TestGenerateIngestorOutputsConfAllFields(t *testing.T) {
+	provider := "sqs_smartbus"
+	maxConn := int32(10)
+	maxRetries := int32(8)
+	timeoutConnect := int32(30)
+	timeoutRead := int32(60)
+	timeoutWrite := int32(45)
+	timeoutRecv := int32(20)
+	timeoutVis := int32(300)
+	bufferVis := int32(120)
+	execWorkers := int32(4)
+	minPending := int32(100)
+	renewRetries := int32(3)
+	sslVerify := true
+
+	queue := &enterpriseApi.QueueSpec{
+		Provider: "sqs",
+		SQS: enterpriseApi.SQSSpec{
+			Name:                    "test-queue",
+			AuthRegion:              "us-west-2",
+			Endpoint:                "https://sqs.us-west-2.amazonaws.com",
+			DLQ:                     "sqs-dlq-test",
+			MaxConnections:          &maxConn,
+			MessageGroupID:          "my-group",
+			RetryPolicy:             "none",
+			MaxRetriesPerPart:       &maxRetries,
+			TimeoutConnect:          &timeoutConnect,
+			TimeoutRead:             &timeoutRead,
+			TimeoutWrite:            &timeoutWrite,
+			TimeoutReceiveMessage:   &timeoutRecv,
+			TimeoutVisibility:       &timeoutVis,
+			BufferVisibility:        &bufferVis,
+			ExecutorMaxWorkersCount: &execWorkers,
+			MinPendingMessages:      &minPending,
+			RenewRetries:            &renewRetries,
+			EncodingFormat:          "json",
+			SendInterval:            "10s",
+			DLQProcessInterval:      "2d",
+		},
+	}
+
+	objStorage := &enterpriseApi.ObjectStorageSpec{
+		Provider: "s3",
+		S3: enterpriseApi.S3Spec{
+			Endpoint:             "https://s3.us-west-2.amazonaws.com",
+			Path:                 "bucket/key",
+			SSLVerifyServerCert:  &sslVerify,
+			SSLVersions:          "tls1.2",
+			SSLCommonNameToCheck: "*.example.com",
+			SSLAltNameToCheck:    "alt.example.com",
+			SSLRootCAPath:        "/opt/splunk/etc/auth/ca.pem",
+			CipherSuite:          "ECDHE-RSA-AES256-GCM-SHA384",
+			ECDHCurves:           "prime256v1",
+			DHFile:               "/opt/splunk/etc/auth/dh.pem",
+			EncryptionScheme:     "SSE-KMS",
+			KMSEndpoint:          "https://kms.us-west-2.amazonaws.com",
+			KeyID:                "my-key-id",
+			KeyRefreshInterval:   "1d",
+		},
+	}
+
+	conf := generateIngestorOutputsConf(queue, objStorage, "mykey", "mysecret")
+
+	// Verify all SQS fields
+	assert.Contains(t, conf, fmt.Sprintf("remote_queue.%s.encoding_format = json", provider))
+	assert.Contains(t, conf, fmt.Sprintf("remote_queue.%s.max_count.max_retries_per_part = 8", provider))
+	assert.Contains(t, conf, fmt.Sprintf("remote_queue.%s.retry_policy = none", provider))
+	assert.Contains(t, conf, fmt.Sprintf("remote_queue.%s.send_interval = 10s", provider))
+	assert.Contains(t, conf, fmt.Sprintf("remote_queue.%s.max_connections = 10", provider))
+	assert.Contains(t, conf, fmt.Sprintf("remote_queue.%s.message_group_id = my-group", provider))
+	assert.Contains(t, conf, fmt.Sprintf("remote_queue.%s.timeout.connect = 30", provider))
+	assert.Contains(t, conf, fmt.Sprintf("remote_queue.%s.timeout.read = 60", provider))
+	assert.Contains(t, conf, fmt.Sprintf("remote_queue.%s.timeout.write = 45", provider))
+	assert.Contains(t, conf, fmt.Sprintf("remote_queue.%s.timeout.receive_message = 20", provider))
+	assert.Contains(t, conf, fmt.Sprintf("remote_queue.%s.timeout.visibility = 300", provider))
+	assert.Contains(t, conf, fmt.Sprintf("remote_queue.%s.buffer.visibility = 120", provider))
+	assert.Contains(t, conf, fmt.Sprintf("remote_queue.%s.executor_max_workers_count = 4", provider))
+	assert.Contains(t, conf, fmt.Sprintf("remote_queue.%s.min_pending_messages = 100", provider))
+	assert.Contains(t, conf, fmt.Sprintf("remote_queue.%s.renew_retries = 3", provider))
+	assert.Contains(t, conf, fmt.Sprintf("remote_queue.%s.dead_letter_queue.process_interval = 2d", provider))
+
+	// Verify all S3/large_message_store fields
+	assert.Contains(t, conf, fmt.Sprintf("remote_queue.%s.large_message_store.sslVerifyServerCert = true", provider))
+	assert.Contains(t, conf, fmt.Sprintf("remote_queue.%s.large_message_store.sslVersions = tls1.2", provider))
+	assert.Contains(t, conf, fmt.Sprintf("remote_queue.%s.large_message_store.sslCommonNameToCheck = *.example.com", provider))
+	assert.Contains(t, conf, fmt.Sprintf("remote_queue.%s.large_message_store.sslAltNameToCheck = alt.example.com", provider))
+	assert.Contains(t, conf, fmt.Sprintf("remote_queue.%s.large_message_store.sslRootCAPath = /opt/splunk/etc/auth/ca.pem", provider))
+	assert.Contains(t, conf, fmt.Sprintf("remote_queue.%s.large_message_store.cipherSuite = ECDHE-RSA-AES256-GCM-SHA384", provider))
+	assert.Contains(t, conf, fmt.Sprintf("remote_queue.%s.large_message_store.ecdhCurves = prime256v1", provider))
+	assert.Contains(t, conf, fmt.Sprintf("remote_queue.%s.large_message_store.dhFile = /opt/splunk/etc/auth/dh.pem", provider))
+	assert.Contains(t, conf, fmt.Sprintf("remote_queue.%s.large_message_store.encryption_scheme = SSE-KMS", provider))
+	assert.Contains(t, conf, fmt.Sprintf("remote_queue.%s.large_message_store.kms_endpoint = https://kms.us-west-2.amazonaws.com", provider))
+	assert.Contains(t, conf, fmt.Sprintf("remote_queue.%s.large_message_store.key_id = my-key-id", provider))
+	assert.Contains(t, conf, fmt.Sprintf("remote_queue.%s.large_message_store.key_refresh_interval = 1d", provider))
 }
 
 func TestGenerateIngestorDefaultModeConf(t *testing.T) {
@@ -448,10 +553,30 @@ func TestGenerateIngestorAppConf(t *testing.T) {
 }
 
 func TestGenerateIngestorLocalMeta(t *testing.T) {
-	meta := generateIngestorLocalMeta()
+	checksum := "abc123def456"
+	meta := generateIngestorLocalMeta(checksum)
 	assert.Contains(t, meta, "[]")
 	assert.Contains(t, meta, "access = read : [ * ], write : [ admin ]")
 	assert.Contains(t, meta, "export = system")
+	assert.Contains(t, meta, "[app/install/install_source_checksum]")
+	assert.Contains(t, meta, "data = abc123def456")
+}
+
+func TestComputeIngestorConfChecksum(t *testing.T) {
+	outputs := "some outputs conf"
+	defaultMode := "some default mode conf"
+
+	// Same inputs produce same checksum
+	c1 := computeIngestorConfChecksum(outputs, defaultMode)
+	c2 := computeIngestorConfChecksum(outputs, defaultMode)
+	assert.Equal(t, c1, c2)
+
+	// Different inputs produce different checksum
+	c3 := computeIngestorConfChecksum(outputs+"changed", defaultMode)
+	assert.NotEqual(t, c1, c3)
+
+	// Checksum is a 64-char hex string (SHA-256)
+	assert.Len(t, c1, 64)
 }
 
 func TestBuildAndApplyIngestorQueueConfigMap(t *testing.T) {
@@ -495,8 +620,9 @@ func TestBuildAndApplyIngestorQueueConfigMap(t *testing.T) {
 		SecretKey: "sk",
 	}
 
-	err := buildAndApplyIngestorQueueConfigMap(ctx, c, cr, qosCfg)
+	changed, err := buildAndApplyIngestorQueueConfigMap(ctx, c, cr, qosCfg)
 	assert.NoError(t, err)
+	assert.True(t, changed, "first apply should report changed (create)")
 
 	// Verify ConfigMap was created
 	var cm corev1.ConfigMap
@@ -515,14 +641,24 @@ func TestBuildAndApplyIngestorQueueConfigMap(t *testing.T) {
 	assert.Contains(t, cm.Data["outputs.conf"], "[remote_queue:test-queue]")
 	assert.Contains(t, cm.Data["outputs.conf"], "access_key = ak")
 
+	// Verify local.meta contains checksum stanza
+	assert.Contains(t, cm.Data["local.meta"], "[app/install/install_source_checksum]")
+	assert.Contains(t, cm.Data["local.meta"], "data = ")
+
 	// Verify owner reference
 	assert.Equal(t, 1, len(cm.OwnerReferences))
 	assert.Equal(t, "myingestor", cm.OwnerReferences[0].Name)
 
+	// Re-apply with same config: should report no change
+	changed, err = buildAndApplyIngestorQueueConfigMap(ctx, c, cr, qosCfg)
+	assert.NoError(t, err)
+	assert.False(t, changed, "re-apply with same config should report no change")
+
 	// Update and re-apply: change credentials
 	qosCfg.AccessKey = "new-ak"
-	err = buildAndApplyIngestorQueueConfigMap(ctx, c, cr, qosCfg)
+	changed, err = buildAndApplyIngestorQueueConfigMap(ctx, c, cr, qosCfg)
 	assert.NoError(t, err)
+	assert.True(t, changed, "re-apply with changed config should report changed")
 
 	err = c.Get(ctx, types.NamespacedName{Namespace: "test", Name: cmName}, &cm)
 	assert.NoError(t, err)
