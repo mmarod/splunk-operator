@@ -63,6 +63,62 @@
               "secretName": "splunk-test-ingestor-secret-v1",
               "defaultMode": 420
             }
+          },
+          {
+            "name": "mnt-splunk-queue-config",
+            "configMap": {
+              "name": "splunk-test-ingestor-queue-config",
+              "defaultMode": 420
+            }
+          }
+        ],
+        "initContainers": [
+          {
+            "name": "init-ingestor-queue-config",
+            "image": "splunk/splunk",
+            "command": [
+              "bash",
+              "-c",
+              "mkdir-p/opt/splk/etc/apps/100-sok-ingestorcluster/local&&mkdir-p/opt/splk/etc/apps/100-sok-ingestorcluster/metadata&&ln-sfn/mnt/splunk-queue-config/app.conf/opt/splk/etc/apps/100-sok-ingestorcluster/local/app.conf&&ln-sfn/mnt/splunk-queue-config/outputs.conf/opt/splk/etc/apps/100-sok-ingestorcluster/local/outputs.conf&&ln-sfn/mnt/splunk-queue-config/default-mode.conf/opt/splk/etc/apps/100-sok-ingestorcluster/local/default-mode.conf&&ln-sfn/mnt/splunk-queue-config/local.meta/opt/splk/etc/apps/100-sok-ingestorcluster/metadata/local.meta"
+            ],
+            "resources": {
+              "limits": {
+                "cpu": "1",
+                "memory": "512Mi"
+              },
+              "requests": {
+                "cpu": "250m",
+                "memory": "128Mi"
+              }
+            },
+            "volumeMounts": [
+              {
+                "name": "pvc-etc",
+                "mountPath": "/opt/splk/etc"
+              },
+              {
+                "name": "mnt-splunk-queue-config",
+                "mountPath": "/mnt/splunk-queue-config"
+              }
+            ],
+            "imagePullPolicy": "IfNotPresent",
+            "securityContext": {
+              "capabilities": {
+                "add": [
+                  "NET_BIND_SERVICE"
+                ],
+                "drop": [
+                  "ALL"
+                ]
+              },
+              "privileged": false,
+              "runAsUser": 41812,
+              "runAsNonRoot": true,
+              "allowPrivilegeEscalation": false,
+              "seccompProfile": {
+                "type": "RuntimeDefault"
+              }
+            }
           }
         ],
         "containers": [
@@ -70,50 +126,134 @@
             "name": "splunk",
             "image": "splunk/splunk",
             "ports": [
-              { "name": "http-splunkweb", "containerPort": 8000, "protocol": "TCP" },
-              { "name": "http-hec", "containerPort": 8088, "protocol": "TCP" },
-              { "name": "https-splunkd", "containerPort": 8089, "protocol": "TCP" },
-              { "name": "tcp-s2s", "containerPort": 9997, "protocol": "TCP" },
-              { "name": "user-defined", "containerPort": 32000, "protocol": "UDP" }
+              {
+                "name": "http-splunkweb",
+                "containerPort": 8000,
+                "protocol": "TCP"
+              },
+              {
+                "name": "http-hec",
+                "containerPort": 8088,
+                "protocol": "TCP"
+              },
+              {
+                "name": "https-splunkd",
+                "containerPort": 8089,
+                "protocol": "TCP"
+              },
+              {
+                "name": "tcp-s2s",
+                "containerPort": 9997,
+                "protocol": "TCP"
+              },
+              {
+                "name": "user-defined",
+                "containerPort": 32000,
+                "protocol": "UDP"
+              }
             ],
             "env": [
-              { "name": "TEST_ENV_VAR", "value": "test_value" },
-              { "name": "SPLUNK_HOME", "value": "/opt/splunk" },
-              { "name": "SPLUNK_START_ARGS", "value": "--accept-license" },
-              { "name": "SPLUNK_DEFAULTS_URL", "value": "/mnt/splunk-secrets/default.yml" },
-              { "name": "SPLUNK_HOME_OWNERSHIP_ENFORCEMENT", "value": "false" },
-              { "name": "SPLUNK_ROLE", "value": "splunk_ingestor" },
-              { "name": "SPLUNK_DECLARATIVE_ADMIN_PASSWORD", "value": "true" },
-              { "name": "SPLUNK_OPERATOR_K8_LIVENESS_DRIVER_FILE_PATH", "value": "/tmp/splunk_operator_k8s/probes/k8_liveness_driver.sh" },
-              { "name": "SPLUNK_GENERAL_TERMS", "value": "--accept-sgt-current-at-splunk-com" },
-              { "name": "SPLUNK_SKIP_CLUSTER_BUNDLE_PUSH", "value": "true" }
+              {
+                "name": "TEST_ENV_VAR",
+                "value": "test_value"
+              },
+              {
+                "name": "SPLUNK_HOME",
+                "value": "/opt/splunk"
+              },
+              {
+                "name": "SPLUNK_START_ARGS",
+                "value": "--accept-license"
+              },
+              {
+                "name": "SPLUNK_DEFAULTS_URL",
+                "value": "/mnt/splunk-secrets/default.yml"
+              },
+              {
+                "name": "SPLUNK_HOME_OWNERSHIP_ENFORCEMENT",
+                "value": "false"
+              },
+              {
+                "name": "SPLUNK_ROLE",
+                "value": "splunk_ingestor"
+              },
+              {
+                "name": "SPLUNK_DECLARATIVE_ADMIN_PASSWORD",
+                "value": "true"
+              },
+              {
+                "name": "SPLUNK_OPERATOR_K8_LIVENESS_DRIVER_FILE_PATH",
+                "value": "/tmp/splunk_operator_k8s/probes/k8_liveness_driver.sh"
+              },
+              {
+                "name": "SPLUNK_GENERAL_TERMS",
+                "value": "--accept-sgt-current-at-splunk-com"
+              },
+              {
+                "name": "SPLUNK_SKIP_CLUSTER_BUNDLE_PUSH",
+                "value": "true"
+              }
             ],
             "resources": {
-              "limits": { "cpu": "4", "memory": "8Gi" },
-              "requests": { "cpu": "100m", "memory": "512Mi" }
+              "limits": {
+                "cpu": "4",
+                "memory": "8Gi"
+              },
+              "requests": {
+                "cpu": "100m",
+                "memory": "512Mi"
+              }
             },
             "volumeMounts": [
-              { "name": "pvc-etc", "mountPath": "/opt/splunk/etc" },
-              { "name": "pvc-var", "mountPath": "/opt/splunk/var" },
-              { "name": "splunk-test-probe-configmap", "mountPath": "/mnt/probes" },
-              { "name": "mnt-splunk-secrets", "mountPath": "/mnt/splunk-secrets" }
+              {
+                "name": "pvc-etc",
+                "mountPath": "/opt/splunk/etc"
+              },
+              {
+                "name": "pvc-var",
+                "mountPath": "/opt/splunk/var"
+              },
+              {
+                "name": "splunk-test-probe-configmap",
+                "mountPath": "/mnt/probes"
+              },
+              {
+                "name": "mnt-splunk-secrets",
+                "mountPath": "/mnt/splunk-secrets"
+              },
+              {
+                "name": "mnt-splunk-queue-config",
+                "mountPath": "/mnt/splunk-queue-config"
+              }
             ],
             "livenessProbe": {
-              "exec": { "command": ["/mnt/probes/livenessProbe.sh"] },
+              "exec": {
+                "command": [
+                  "/mnt/probes/livenessProbe.sh"
+                ]
+              },
               "initialDelaySeconds": 30,
               "timeoutSeconds": 30,
               "periodSeconds": 30,
               "failureThreshold": 3
             },
             "readinessProbe": {
-              "exec": { "command": ["/mnt/probes/readinessProbe.sh"] },
+              "exec": {
+                "command": [
+                  "/mnt/probes/readinessProbe.sh"
+                ]
+              },
               "initialDelaySeconds": 10,
               "timeoutSeconds": 5,
               "periodSeconds": 5,
               "failureThreshold": 3
             },
             "startupProbe": {
-              "exec": { "command": ["/mnt/probes/startupProbe.sh"] },
+              "exec": {
+                "command": [
+                  "/mnt/probes/startupProbe.sh"
+                ]
+              },
               "initialDelaySeconds": 40,
               "timeoutSeconds": 30,
               "periodSeconds": 30,
@@ -121,12 +261,21 @@
             },
             "imagePullPolicy": "IfNotPresent",
             "securityContext": {
-              "capabilities": { "add": ["NET_BIND_SERVICE"], "drop": ["ALL"] },
+              "capabilities": {
+                "add": [
+                  "NET_BIND_SERVICE"
+                ],
+                "drop": [
+                  "ALL"
+                ]
+              },
               "privileged": false,
               "runAsUser": 41812,
               "runAsNonRoot": true,
               "allowPrivilegeEscalation": false,
-              "seccompProfile": { "type": "RuntimeDefault" }
+              "seccompProfile": {
+                "type": "RuntimeDefault"
+              }
             }
           }
         ],
@@ -148,7 +297,9 @@
                       {
                         "key": "app.kubernetes.io/instance",
                         "operator": "In",
-                        "values": ["splunk-test-ingestor"]
+                        "values": [
+                          "splunk-test-ingestor"
+                        ]
                       }
                     ]
                   },
@@ -176,8 +327,14 @@
           }
         },
         "spec": {
-          "accessModes": ["ReadWriteOnce"],
-          "resources": { "requests": { "storage": "10Gi" } }
+          "accessModes": [
+            "ReadWriteOnce"
+          ],
+          "resources": {
+            "requests": {
+              "storage": "10Gi"
+            }
+          }
         },
         "status": {}
       },
@@ -195,15 +352,26 @@
           }
         },
         "spec": {
-          "accessModes": ["ReadWriteOnce"],
-          "resources": { "requests": { "storage": "100Gi" } }
+          "accessModes": [
+            "ReadWriteOnce"
+          ],
+          "resources": {
+            "requests": {
+              "storage": "100Gi"
+            }
+          }
         },
         "status": {}
       }
     ],
     "serviceName": "splunk-test-ingestor-headless",
     "podManagementPolicy": "Parallel",
-    "updateStrategy": { "type": "OnDelete" }
+    "updateStrategy": {
+      "type": "OnDelete"
+    }
   },
-  "status": { "replicas": 0, "availableReplicas": 0 }
+  "status": {
+    "replicas": 0,
+    "availableReplicas": 0
+  }
 }

@@ -17,16 +17,12 @@ package enterprise
 import (
 	"context"
 	"fmt"
-	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
-	"github.com/go-logr/logr"
 	enterpriseApi "github.com/splunk/splunk-operator/api/v4"
-	splclient "github.com/splunk/splunk-operator/pkg/splunk/client"
-	splcommon "github.com/splunk/splunk-operator/pkg/splunk/common"
 	spltest "github.com/splunk/splunk-operator/pkg/splunk/test"
 	splutil "github.com/splunk/splunk-operator/pkg/splunk/util"
 	"github.com/stretchr/testify/assert"
@@ -34,6 +30,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
 
@@ -63,9 +60,6 @@ func TestApplyIngestorCluster(t *testing.T) {
 	_ = appsv1.AddToScheme(scheme)
 	c := fake.NewClientBuilder().WithScheme(scheme).Build()
 
-	// Object definitions
-	provider := "sqs_smartbus"
-
 	queue := &enterpriseApi.Queue{
 		TypeMeta: metav1.TypeMeta{
 			Kind:       "Queue",
@@ -87,7 +81,7 @@ func TestApplyIngestorCluster(t *testing.T) {
 	}
 	c.Create(ctx, queue)
 
-	os := &enterpriseApi.ObjectStorage{
+	objStorage := &enterpriseApi.ObjectStorage{
 		TypeMeta: metav1.TypeMeta{
 			Kind:       "ObjectStorage",
 			APIVersion: "enterprise.splunk.com/v4",
@@ -104,7 +98,7 @@ func TestApplyIngestorCluster(t *testing.T) {
 			},
 		},
 	}
-	c.Create(ctx, os)
+	c.Create(ctx, objStorage)
 
 	cr := &enterpriseApi.IngestorCluster{
 		TypeMeta: metav1.TypeMeta{
@@ -126,8 +120,8 @@ func TestApplyIngestorCluster(t *testing.T) {
 				Namespace: queue.Namespace,
 			},
 			ObjectStorageRef: corev1.ObjectReference{
-				Name:      os.Name,
-				Namespace: os.Namespace,
+				Name:      objStorage.Name,
+				Namespace: objStorage.Namespace,
 			},
 		},
 	}
@@ -240,7 +234,7 @@ func TestApplyIngestorCluster(t *testing.T) {
 	c.Create(ctx, pod1)
 	c.Create(ctx, pod2)
 
-	// ApplyIngestorCluster
+	// First reconcile
 	cr.Spec.Replicas = replicas
 	cr.Status.ReadyReplicas = cr.Spec.Replicas
 
@@ -249,68 +243,18 @@ func TestApplyIngestorCluster(t *testing.T) {
 	assert.True(t, result.Requeue)
 	assert.NotEqual(t, enterpriseApi.PhaseError, cr.Status.Phase)
 
-	// outputs.conf
-	origNew := newIngestorClusterPodManager
-	mockHTTPClient := &spltest.MockHTTPClient{}
-	newIngestorClusterPodManager = func(l logr.Logger, cr *enterpriseApi.IngestorCluster, secret *corev1.Secret, _ NewSplunkClientFunc, c splcommon.ControllerClient) ingestorClusterPodManager {
-		return ingestorClusterPodManager{
-			c:   c,
-			log: l, cr: cr, secrets: secret,
-			newSplunkClient: func(uri, user, pass string) *splclient.SplunkClient {
-				return &splclient.SplunkClient{ManagementURI: uri, Username: user, Password: pass, Client: mockHTTPClient}
-			},
-		}
-	}
-	defer func() { newIngestorClusterPodManager = origNew }()
+	// Verify ConfigMap was created
+	var cm corev1.ConfigMap
+	cmName := GetIngestorQueueConfigMapName(cr.GetName())
+	err = c.Get(ctx, types.NamespacedName{Namespace: "test", Name: cmName}, &cm)
+	assert.NoError(t, err)
+	assert.Contains(t, cm.Data, "app.conf")
+	assert.Contains(t, cm.Data, "outputs.conf")
+	assert.Contains(t, cm.Data, "default-mode.conf")
+	assert.Contains(t, cm.Data, "local.meta")
+	assert.Contains(t, cm.Data["outputs.conf"], "remote_queue:test-queue")
 
-	propertyKVList := [][]string{
-		{"remote_queue.type", provider},
-		{fmt.Sprintf("remote_queue.%s.encoding_format", provider), "s2s"},
-		{fmt.Sprintf("remote_queue.%s.auth_region", provider), queue.Spec.SQS.AuthRegion},
-		{fmt.Sprintf("remote_queue.%s.endpoint", provider), queue.Spec.SQS.Endpoint},
-		{fmt.Sprintf("remote_queue.%s.large_message_store.endpoint", provider), os.Spec.S3.Endpoint},
-		{fmt.Sprintf("remote_queue.%s.large_message_store.path", provider), os.Spec.S3.Path},
-		{fmt.Sprintf("remote_queue.%s.dead_letter_queue.name", provider), queue.Spec.SQS.DLQ},
-		{fmt.Sprintf("remote_queue.%s.max_count.max_retries_per_part", provider), "4"},
-		{fmt.Sprintf("remote_queue.%s.retry_policy", provider), "max_count"},
-		{fmt.Sprintf("remote_queue.%s.send_interval", provider), "5s"},
-	}
-
-	body := buildFormBody(propertyKVList)
-	addRemoteQueueHandlersForIngestor(mockHTTPClient, cr, &queue.Spec, "conf-outputs", body)
-
-	// default-mode.conf
-	propertyKVList = [][]string{
-		{"pipeline:remotequeueruleset", "disabled", "false"},
-		{"pipeline:ruleset", "disabled", "true"},
-		{"pipeline:remotequeuetyping", "disabled", "false"},
-		{"pipeline:remotequeueoutput", "disabled", "false"},
-		{"pipeline:typing", "disabled", "true"},
-		{"pipeline:indexerPipe", "disabled", "true"},
-	}
-
-	for i := 0; i < int(cr.Status.ReadyReplicas); i++ {
-		podName := fmt.Sprintf("splunk-test-ingestor-%d", i)
-		baseURL := fmt.Sprintf("https://%s.splunk-%s-ingestor-headless.%s.svc.cluster.local:8089/servicesNS/nobody/system/configs/conf-default-mode", podName, cr.GetName(), cr.GetNamespace())
-
-		for _, field := range propertyKVList {
-			req, _ := http.NewRequest("POST", baseURL, strings.NewReader(fmt.Sprintf("name=%s", field[0])))
-			mockHTTPClient.AddHandler(req, 200, "", nil)
-
-			updateURL := fmt.Sprintf("%s/%s", baseURL, field[0])
-			req, _ = http.NewRequest("POST", updateURL, strings.NewReader(fmt.Sprintf("%s=%s", field[1], field[2])))
-			mockHTTPClient.AddHandler(req, 200, "", nil)
-		}
-	}
-
-	for i := 0; i < int(cr.Status.ReadyReplicas); i++ {
-		podName := fmt.Sprintf("splunk-test-ingestor-%d", i)
-		baseURL := fmt.Sprintf("https://%s.splunk-%s-ingestor-headless.%s.svc.cluster.local:8089/services/server/control/restart", podName, cr.GetName(), cr.GetNamespace())
-		req, _ := http.NewRequest("POST", baseURL, nil)
-		mockHTTPClient.AddHandler(req, 200, "", nil)
-	}
-
-	// Second reconcile should now yield Ready
+	// Second reconcile should now yield Ready (no REST API calls needed)
 	cr.Status.TelAppInstalled = true
 	result, err = ApplyIngestorCluster(ctx, c, cr)
 	assert.NoError(t, err)
@@ -404,374 +348,243 @@ func TestGetIngestorStatefulSet(t *testing.T) {
 	test(loadFixture(t, "statefulset_ingestor_with_labels.json"))
 }
 
-func TestGetQueueAndPipelineInputsForIngestorConfFiles(t *testing.T) {
+func TestGenerateIngestorOutputsConf(t *testing.T) {
 	provider := "sqs_smartbus"
 
-	queue := enterpriseApi.Queue{
-		TypeMeta: metav1.TypeMeta{
-			Kind:       "Queue",
-			APIVersion: "enterprise.splunk.com/v4",
-		},
-		ObjectMeta: metav1.ObjectMeta{
-			Name: "queue",
-		},
-		Spec: enterpriseApi.QueueSpec{
-			Provider: "sqs",
-			SQS: enterpriseApi.SQSSpec{
-				Name:       "test-queue",
-				AuthRegion: "us-west-2",
-				Endpoint:   "https://sqs.us-west-2.amazonaws.com",
-				DLQ:        "sqs-dlq-test",
-				VolList: []enterpriseApi.VolumeSpec{
-					{SecretRef: "secret"},
-				},
-			},
+	queue := &enterpriseApi.QueueSpec{
+		Provider: "sqs",
+		SQS: enterpriseApi.SQSSpec{
+			Name:       "test-queue",
+			AuthRegion: "us-west-2",
+			Endpoint:   "https://sqs.us-west-2.amazonaws.com",
+			DLQ:        "sqs-dlq-test",
 		},
 	}
 
-	os := enterpriseApi.ObjectStorage{
-		TypeMeta: metav1.TypeMeta{
-			Kind:       "ObjectStorage",
-			APIVersion: "enterprise.splunk.com/v4",
-		},
-		ObjectMeta: metav1.ObjectMeta{
-			Name: "os",
-		},
-		Spec: enterpriseApi.ObjectStorageSpec{
-			Provider: "s3",
-			S3: enterpriseApi.S3Spec{
-				Endpoint: "https://s3.us-west-2.amazonaws.com",
-				Path:     "bucket/key",
-			},
+	objStorage := &enterpriseApi.ObjectStorageSpec{
+		Provider: "s3",
+		S3: enterpriseApi.S3Spec{
+			Endpoint: "https://s3.us-west-2.amazonaws.com",
+			Path:     "bucket/key",
 		},
 	}
 
-	key := "key"
-	secret := "secret"
+	// With credentials
+	conf := generateIngestorOutputsConf(queue, objStorage, "mykey", "mysecret")
+	assert.Contains(t, conf, "[remote_queue:test-queue]")
+	assert.Contains(t, conf, fmt.Sprintf("remote_queue.type = %s", provider))
+	assert.Contains(t, conf, fmt.Sprintf("remote_queue.%s.auth_region = us-west-2", provider))
+	assert.Contains(t, conf, fmt.Sprintf("remote_queue.%s.endpoint = https://sqs.us-west-2.amazonaws.com", provider))
+	assert.Contains(t, conf, fmt.Sprintf("remote_queue.%s.large_message_store.endpoint = https://s3.us-west-2.amazonaws.com", provider))
+	assert.Contains(t, conf, fmt.Sprintf("remote_queue.%s.large_message_store.path = s3://bucket/key", provider))
+	assert.Contains(t, conf, fmt.Sprintf("remote_queue.%s.dead_letter_queue.name = sqs-dlq-test", provider))
+	assert.Contains(t, conf, fmt.Sprintf("remote_queue.%s.encoding_format = s2s", provider))
+	assert.Contains(t, conf, fmt.Sprintf("remote_queue.%s.access_key = mykey", provider))
+	assert.Contains(t, conf, fmt.Sprintf("remote_queue.%s.secret_key = mysecret", provider))
 
-	queueInputs, pipelineInputs := getQueueAndPipelineInputsForIngestorConfFiles(&queue.Spec, &os.Spec, key, secret)
-
-	assert.Equal(t, 12, len(queueInputs))
-	assert.Equal(t, [][]string{
-		{"remote_queue.type", provider},
-		{fmt.Sprintf("remote_queue.%s.auth_region", provider), queue.Spec.SQS.AuthRegion},
-		{fmt.Sprintf("remote_queue.%s.endpoint", provider), queue.Spec.SQS.Endpoint},
-		{fmt.Sprintf("remote_queue.%s.large_message_store.endpoint", provider), os.Spec.S3.Endpoint},
-		{fmt.Sprintf("remote_queue.%s.large_message_store.path", provider), "s3://" + os.Spec.S3.Path},
-		{fmt.Sprintf("remote_queue.%s.dead_letter_queue.name", provider), queue.Spec.SQS.DLQ},
-		{fmt.Sprintf("remote_queue.%s.encoding_format", provider), "s2s"},
-		{fmt.Sprintf("remote_queue.%s.max_count.max_retries_per_part", provider), "4"},
-		{fmt.Sprintf("remote_queue.%s.retry_policy", provider), "max_count"},
-		{fmt.Sprintf("remote_queue.%s.send_interval", provider), "5s"},
-		{fmt.Sprintf("remote_queue.%s.access_key", provider), key},
-		{fmt.Sprintf("remote_queue.%s.secret_key", provider), secret},
-	}, queueInputs)
-
-	assert.Equal(t, 6, len(pipelineInputs))
-	assert.Equal(t, [][]string{
-		{"pipeline:remotequeueruleset", "disabled", "false"},
-		{"pipeline:ruleset", "disabled", "true"},
-		{"pipeline:remotequeuetyping", "disabled", "false"},
-		{"pipeline:remotequeueoutput", "disabled", "false"},
-		{"pipeline:typing", "disabled", "true"},
-		{"pipeline:indexerPipe", "disabled", "true"},
-	}, pipelineInputs)
+	// Without credentials (IRSA)
+	conf = generateIngestorOutputsConf(queue, objStorage, "", "")
+	assert.NotContains(t, conf, "access_key")
+	assert.NotContains(t, conf, "secret_key")
 }
 
-func TestGetQueueAndPipelineInputsForIngestorConfFilesSQSCP(t *testing.T) {
+func TestGenerateIngestorOutputsConfSQSCP(t *testing.T) {
 	provider := "sqs_smartbus_cp"
 
-	queue := enterpriseApi.Queue{
-		TypeMeta: metav1.TypeMeta{
-			Kind:       "Queue",
-			APIVersion: "enterprise.splunk.com/v4",
-		},
-		ObjectMeta: metav1.ObjectMeta{
-			Name: "queue",
-		},
-		Spec: enterpriseApi.QueueSpec{
-			Provider: "sqs_cp",
-			SQS: enterpriseApi.SQSSpec{
-				Name:       "test-queue",
-				AuthRegion: "us-west-2",
-				Endpoint:   "https://sqs.us-west-2.amazonaws.com",
-				DLQ:        "sqs-dlq-test",
-				VolList: []enterpriseApi.VolumeSpec{
-					{SecretRef: "secret"},
-				},
-			},
+	queue := &enterpriseApi.QueueSpec{
+		Provider: "sqs_cp",
+		SQS: enterpriseApi.SQSSpec{
+			Name:       "test-queue",
+			AuthRegion: "us-west-2",
+			Endpoint:   "https://sqs.us-west-2.amazonaws.com",
+			DLQ:        "sqs-dlq-test",
 		},
 	}
 
-	os := enterpriseApi.ObjectStorage{
-		TypeMeta: metav1.TypeMeta{
-			Kind:       "ObjectStorage",
-			APIVersion: "enterprise.splunk.com/v4",
-		},
-		ObjectMeta: metav1.ObjectMeta{
-			Name: "os",
-		},
-		Spec: enterpriseApi.ObjectStorageSpec{
-			Provider: "s3",
-			S3: enterpriseApi.S3Spec{
-				Endpoint: "https://s3.us-west-2.amazonaws.com",
-				Path:     "bucket/key",
-			},
+	objStorage := &enterpriseApi.ObjectStorageSpec{
+		Provider: "s3",
+		S3: enterpriseApi.S3Spec{
+			Endpoint: "https://s3.us-west-2.amazonaws.com",
+			Path:     "bucket/key",
 		},
 	}
 
-	key := "key"
-	secret := "secret"
-
-	queueInputs, pipelineInputs := getQueueAndPipelineInputsForIngestorConfFiles(&queue.Spec, &os.Spec, key, secret)
-
-	assert.Equal(t, 12, len(queueInputs))
-	assert.Equal(t, [][]string{
-		{"remote_queue.type", provider},
-		{fmt.Sprintf("remote_queue.%s.auth_region", provider), queue.Spec.SQS.AuthRegion},
-		{fmt.Sprintf("remote_queue.%s.endpoint", provider), queue.Spec.SQS.Endpoint},
-		{fmt.Sprintf("remote_queue.%s.large_message_store.endpoint", provider), os.Spec.S3.Endpoint},
-		{fmt.Sprintf("remote_queue.%s.large_message_store.path", provider), "s3://" + os.Spec.S3.Path},
-		{fmt.Sprintf("remote_queue.%s.dead_letter_queue.name", provider), queue.Spec.SQS.DLQ},
-		{fmt.Sprintf("remote_queue.%s.encoding_format", provider), "s2s"},
-		{fmt.Sprintf("remote_queue.%s.max_count.max_retries_per_part", provider), "4"},
-		{fmt.Sprintf("remote_queue.%s.retry_policy", provider), "max_count"},
-		{fmt.Sprintf("remote_queue.%s.send_interval", provider), "5s"},
-		{fmt.Sprintf("remote_queue.%s.access_key", provider), key},
-		{fmt.Sprintf("remote_queue.%s.secret_key", provider), secret},
-	}, queueInputs)
-
-	assert.Equal(t, 6, len(pipelineInputs))
-	assert.Equal(t, [][]string{
-		{"pipeline:remotequeueruleset", "disabled", "false"},
-		{"pipeline:ruleset", "disabled", "true"},
-		{"pipeline:remotequeuetyping", "disabled", "false"},
-		{"pipeline:remotequeueoutput", "disabled", "false"},
-		{"pipeline:typing", "disabled", "true"},
-		{"pipeline:indexerPipe", "disabled", "true"},
-	}, pipelineInputs)
+	conf := generateIngestorOutputsConf(queue, objStorage, "key", "secret")
+	assert.Contains(t, conf, "[remote_queue:test-queue]")
+	assert.Contains(t, conf, fmt.Sprintf("remote_queue.type = %s", provider))
+	assert.Contains(t, conf, fmt.Sprintf("remote_queue.%s.auth_region = us-west-2", provider))
+	assert.Contains(t, conf, fmt.Sprintf("remote_queue.%s.access_key = key", provider))
+	assert.Contains(t, conf, fmt.Sprintf("remote_queue.%s.secret_key = secret", provider))
 }
 
-func TestUpdateIngestorConfFiles(t *testing.T) {
-	c := spltest.NewMockClient()
+func TestGenerateIngestorDefaultModeConf(t *testing.T) {
+	conf := generateIngestorDefaultModeConf()
+
+	assert.Contains(t, conf, "[pipeline:remotequeueruleset]")
+	assert.Contains(t, conf, "disabled = false")
+	assert.Contains(t, conf, "[pipeline:ruleset]")
+	assert.Contains(t, conf, "disabled = true")
+	assert.Contains(t, conf, "[pipeline:remotequeuetyping]")
+	assert.Contains(t, conf, "[pipeline:remotequeueoutput]")
+	assert.Contains(t, conf, "[pipeline:typing]")
+	assert.Contains(t, conf, "[pipeline:indexerPipe]")
+
+	// Count stanzas
+	stanzaCount := strings.Count(conf, "[pipeline:")
+	assert.Equal(t, 6, stanzaCount)
+}
+
+func TestGenerateIngestorAppConf(t *testing.T) {
+	conf := generateIngestorAppConf()
+	assert.Contains(t, conf, "[install]")
+	assert.Contains(t, conf, "state = enabled")
+	assert.Contains(t, conf, "allows_disable = false")
+	assert.Contains(t, conf, "[package]")
+	assert.Contains(t, conf, "check_for_updates = false")
+	assert.Contains(t, conf, "[ui]")
+	assert.Contains(t, conf, "is_visible = false")
+	assert.Contains(t, conf, "is_manageable = false")
+	assert.NotContains(t, conf, "[launcher]")
+}
+
+func TestGenerateIngestorLocalMeta(t *testing.T) {
+	meta := generateIngestorLocalMeta()
+	assert.Contains(t, meta, "[]")
+	assert.Contains(t, meta, "access = read : [ * ], write : [ admin ]")
+	assert.Contains(t, meta, "export = system")
+}
+
+func TestBuildAndApplyIngestorQueueConfigMap(t *testing.T) {
 	ctx := context.TODO()
 
-	// Object definitions
-	provider := "sqs_smartbus"
-
-	accessKey := "accessKey"
-	secretKey := "secretKey"
-
-	queue := &enterpriseApi.Queue{
-		TypeMeta: metav1.TypeMeta{
-			Kind:       "Queue",
-			APIVersion: "enterprise.splunk.com/v4",
-		},
-		ObjectMeta: metav1.ObjectMeta{
-			Name: "queue",
-		},
-		Spec: enterpriseApi.QueueSpec{
-			Provider: "sqs",
-			SQS: enterpriseApi.SQSSpec{
-				Name:       "test-queue",
-				AuthRegion: "us-west-2",
-				Endpoint:   "https://sqs.us-west-2.amazonaws.com",
-				DLQ:        "sqs-dlq-test",
-			},
-		},
-	}
-
-	os := &enterpriseApi.ObjectStorage{
-		TypeMeta: metav1.TypeMeta{
-			Kind:       "ObjectStorage",
-			APIVersion: "enterprise.splunk.com/v4",
-		},
-		ObjectMeta: metav1.ObjectMeta{
-			Name: "os",
-		},
-		Spec: enterpriseApi.ObjectStorageSpec{
-			Provider: "s3",
-			S3: enterpriseApi.S3Spec{
-				Endpoint: "https://s3.us-west-2.amazonaws.com",
-				Path:     "bucket/key",
-			},
-		},
-	}
+	scheme := runtime.NewScheme()
+	_ = enterpriseApi.AddToScheme(scheme)
+	_ = corev1.AddToScheme(scheme)
+	c := fake.NewClientBuilder().WithScheme(scheme).Build()
 
 	cr := &enterpriseApi.IngestorCluster{
 		TypeMeta: metav1.TypeMeta{
-			Kind: "IngestorCluster",
+			Kind:       "IngestorCluster",
+			APIVersion: "enterprise.splunk.com/v4",
 		},
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      "test",
+			Name:      "myingestor",
 			Namespace: "test",
 		},
-		Spec: enterpriseApi.IngestorClusterSpec{
-			QueueRef: corev1.ObjectReference{
-				Name: queue.Name,
-			},
-			ObjectStorageRef: corev1.ObjectReference{
-				Name: os.Name,
+	}
+	c.Create(ctx, cr)
+
+	qosCfg := &QueueOSConfig{
+		Queue: enterpriseApi.QueueSpec{
+			Provider: "sqs",
+			SQS: enterpriseApi.SQSSpec{
+				Name:       "test-queue",
+				AuthRegion: "us-west-2",
+				Endpoint:   "https://sqs.us-west-2.amazonaws.com",
+				DLQ:        "sqs-dlq-test",
 			},
 		},
-		Status: enterpriseApi.IngestorClusterStatus{
-			Replicas:                3,
-			ReadyReplicas:           3,
-			CredentialSecretVersion: "123",
+		OS: enterpriseApi.ObjectStorageSpec{
+			Provider: "s3",
+			S3: enterpriseApi.S3Spec{
+				Endpoint: "https://s3.us-west-2.amazonaws.com",
+				Path:     "bucket/key",
+			},
+		},
+		AccessKey: "ak",
+		SecretKey: "sk",
+	}
+
+	err := buildAndApplyIngestorQueueConfigMap(ctx, c, cr, qosCfg)
+	assert.NoError(t, err)
+
+	// Verify ConfigMap was created
+	var cm corev1.ConfigMap
+	cmName := GetIngestorQueueConfigMapName(cr.GetName())
+	err = c.Get(ctx, types.NamespacedName{Namespace: "test", Name: cmName}, &cm)
+	assert.NoError(t, err)
+	assert.Equal(t, "splunk-myingestor-ingestor-queue-config", cm.Name)
+
+	// Verify all keys present
+	assert.Contains(t, cm.Data, "app.conf")
+	assert.Contains(t, cm.Data, "local.meta")
+	assert.Contains(t, cm.Data, "outputs.conf")
+	assert.Contains(t, cm.Data, "default-mode.conf")
+
+	// Verify outputs.conf content
+	assert.Contains(t, cm.Data["outputs.conf"], "[remote_queue:test-queue]")
+	assert.Contains(t, cm.Data["outputs.conf"], "access_key = ak")
+
+	// Verify owner reference
+	assert.Equal(t, 1, len(cm.OwnerReferences))
+	assert.Equal(t, "myingestor", cm.OwnerReferences[0].Name)
+
+	// Update and re-apply: change credentials
+	qosCfg.AccessKey = "new-ak"
+	err = buildAndApplyIngestorQueueConfigMap(ctx, c, cr, qosCfg)
+	assert.NoError(t, err)
+
+	err = c.Get(ctx, types.NamespacedName{Namespace: "test", Name: cmName}, &cm)
+	assert.NoError(t, err)
+	assert.Contains(t, cm.Data["outputs.conf"], "access_key = new-ak")
+}
+
+func TestGetQueueAndObjectStorageInputsForIngestorConfFiles(t *testing.T) {
+	provider := "sqs_smartbus"
+
+	queue := &enterpriseApi.QueueSpec{
+		Provider: "sqs",
+		SQS: enterpriseApi.SQSSpec{
+			Name:       "test-queue",
+			AuthRegion: "us-west-2",
+			Endpoint:   "https://sqs.us-west-2.amazonaws.com",
+			DLQ:        "sqs-dlq-test",
+			VolList: []enterpriseApi.VolumeSpec{
+				{SecretRef: "secret"},
+			},
 		},
 	}
 
-	pod0 := &corev1.Pod{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "splunk-test-ingestor-0",
-			Namespace: "test",
-			Labels: map[string]string{
-				"app.kubernetes.io/instance": "splunk-test-ingestor",
-			},
-		},
-		Spec: corev1.PodSpec{
-			Volumes: []corev1.Volume{
-				{
-					Name: "dummy-volume",
-					VolumeSource: corev1.VolumeSource{
-						EmptyDir: &corev1.EmptyDirVolumeSource{},
-					},
-				},
-				{
-					Name: "mnt-splunk-secrets",
-					VolumeSource: corev1.VolumeSource{
-						Secret: &corev1.SecretVolumeSource{
-							SecretName: "test-secrets",
-						},
-					},
-				},
-			},
-		},
-		Status: corev1.PodStatus{
-			Phase: corev1.PodRunning,
-			ContainerStatuses: []corev1.ContainerStatus{
-				{Ready: true},
-			},
+	objStorage := &enterpriseApi.ObjectStorageSpec{
+		Provider: "s3",
+		S3: enterpriseApi.S3Spec{
+			Endpoint: "https://s3.us-west-2.amazonaws.com",
+			Path:     "bucket/key",
 		},
 	}
 
-	pod1 := pod0.DeepCopy()
-	pod1.ObjectMeta.Name = "splunk-test-ingestor-1"
+	config := getQueueAndObjectStorageInputsForIngestorConfFiles(queue, objStorage, "key", "secret")
 
-	pod2 := pod0.DeepCopy()
-	pod2.ObjectMeta.Name = "splunk-test-ingestor-2"
-
-	c.Create(ctx, pod0)
-	c.Create(ctx, pod1)
-	c.Create(ctx, pod2)
-
-	secret := &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "test-secrets",
-			Namespace: "test",
-		},
-		Data: map[string][]byte{
-			"password": []byte("dummy"),
-		},
-	}
-
-	// Negative test case: secret not found
-	mgr := &ingestorClusterPodManager{}
-
-	err := mgr.updateIngestorConfFiles(ctx, cr, &queue.Spec, &os.Spec, accessKey, secretKey, c)
-	assert.NotNil(t, err)
-
-	// Mock secret
-	c.Create(ctx, secret)
-
-	mockHTTPClient := &spltest.MockHTTPClient{}
-
-	// Negative test case: failure in creating remote queue stanza
-	mgr = newTestIngestorQueuePipelineManager(mockHTTPClient)
-
-	err = mgr.updateIngestorConfFiles(ctx, cr, &queue.Spec, &os.Spec, accessKey, secretKey, c)
-	assert.NotNil(t, err)
-
-	// outputs.conf
-	propertyKVList := [][]string{
+	assert.Equal(t, 12, len(config))
+	assert.Equal(t, [][]string{
+		{"remote_queue.type", provider},
+		{fmt.Sprintf("remote_queue.%s.auth_region", provider), queue.SQS.AuthRegion},
+		{fmt.Sprintf("remote_queue.%s.endpoint", provider), queue.SQS.Endpoint},
+		{fmt.Sprintf("remote_queue.%s.large_message_store.endpoint", provider), objStorage.S3.Endpoint},
+		{fmt.Sprintf("remote_queue.%s.large_message_store.path", provider), "s3://" + objStorage.S3.Path},
+		{fmt.Sprintf("remote_queue.%s.dead_letter_queue.name", provider), queue.SQS.DLQ},
 		{fmt.Sprintf("remote_queue.%s.encoding_format", provider), "s2s"},
-		{fmt.Sprintf("remote_queue.%s.auth_region", provider), queue.Spec.SQS.AuthRegion},
-		{fmt.Sprintf("remote_queue.%s.endpoint", provider), queue.Spec.SQS.Endpoint},
-		{fmt.Sprintf("remote_queue.%s.large_message_store.endpoint", provider), os.Spec.S3.Endpoint},
-		{fmt.Sprintf("remote_queue.%s.large_message_store.path", provider), os.Spec.S3.Path},
-		{fmt.Sprintf("remote_queue.%s.dead_letter_queue.name", provider), queue.Spec.SQS.DLQ},
-		{fmt.Sprintf("remote_queue.max_count.%s.max_retries_per_part", provider), "4"},
+		{fmt.Sprintf("remote_queue.%s.max_count.max_retries_per_part", provider), "4"},
 		{fmt.Sprintf("remote_queue.%s.retry_policy", provider), "max_count"},
 		{fmt.Sprintf("remote_queue.%s.send_interval", provider), "5s"},
-	}
+		{fmt.Sprintf("remote_queue.%s.access_key", provider), "key"},
+		{fmt.Sprintf("remote_queue.%s.secret_key", provider), "secret"},
+	}, config)
+}
 
-	body := buildFormBody(propertyKVList)
-	addRemoteQueueHandlersForIngestor(mockHTTPClient, cr, &queue.Spec, "conf-outputs", body)
-
-	// Negative test case: failure in creating remote queue stanza
-	mgr = newTestIngestorQueuePipelineManager(mockHTTPClient)
-
-	err = mgr.updateIngestorConfFiles(ctx, cr, &queue.Spec, &os.Spec, accessKey, secretKey, c)
-	assert.NotNil(t, err)
-
-	// default-mode.conf
-	propertyKVList = [][]string{
+func TestGetPipelineInputsForConfFile(t *testing.T) {
+	config := getPipelineInputsForConfFile(false)
+	assert.Equal(t, 6, len(config))
+	assert.Equal(t, [][]string{
 		{"pipeline:remotequeueruleset", "disabled", "false"},
 		{"pipeline:ruleset", "disabled", "true"},
 		{"pipeline:remotequeuetyping", "disabled", "false"},
 		{"pipeline:remotequeueoutput", "disabled", "false"},
 		{"pipeline:typing", "disabled", "true"},
 		{"pipeline:indexerPipe", "disabled", "true"},
-	}
+	}, config)
 
-	for i := 0; i < int(cr.Status.ReadyReplicas); i++ {
-		podName := fmt.Sprintf("splunk-test-ingestor-%d", i)
-		baseURL := fmt.Sprintf("https://%s.splunk-%s-ingestor-headless.%s.svc.cluster.local:8089/servicesNS/nobody/system/configs/conf-default-mode", podName, cr.GetName(), cr.GetNamespace())
-
-		for _, field := range propertyKVList {
-			req, _ := http.NewRequest("POST", baseURL, strings.NewReader(fmt.Sprintf("name=%s", field[0])))
-			mockHTTPClient.AddHandler(req, 200, "", nil)
-
-			updateURL := fmt.Sprintf("%s/%s", baseURL, field[0])
-			req, _ = http.NewRequest("POST", updateURL, strings.NewReader(fmt.Sprintf("%s=%s", field[1], field[2])))
-			mockHTTPClient.AddHandler(req, 200, "", nil)
-		}
-	}
-
-	mgr = newTestIngestorQueuePipelineManager(mockHTTPClient)
-
-	err = mgr.updateIngestorConfFiles(ctx, cr, &queue.Spec, &os.Spec, accessKey, secretKey, c)
-	assert.Nil(t, err)
-}
-
-func addRemoteQueueHandlersForIngestor(mockHTTPClient *spltest.MockHTTPClient, cr *enterpriseApi.IngestorCluster, queue *enterpriseApi.QueueSpec, confName, body string) {
-	for i := 0; i < int(cr.Status.ReadyReplicas); i++ {
-		podName := fmt.Sprintf("splunk-%s-ingestor-%d", cr.GetName(), i)
-		baseURL := fmt.Sprintf(
-			"https://%s.splunk-%s-ingestor-headless.%s.svc.cluster.local:8089/servicesNS/nobody/system/configs/%s",
-			podName, cr.GetName(), cr.GetNamespace(), confName,
-		)
-
-		createReqBody := fmt.Sprintf("name=%s", fmt.Sprintf("remote_queue:%s", queue.SQS.Name))
-		reqCreate, _ := http.NewRequest("POST", baseURL, strings.NewReader(createReqBody))
-		mockHTTPClient.AddHandler(reqCreate, 200, "", nil)
-
-		updateURL := fmt.Sprintf("%s/%s", baseURL, fmt.Sprintf("remote_queue:%s", queue.SQS.Name))
-		reqUpdate, _ := http.NewRequest("POST", updateURL, strings.NewReader(body))
-		mockHTTPClient.AddHandler(reqUpdate, 200, "", nil)
-	}
-}
-
-func newTestIngestorQueuePipelineManager(mockHTTPClient *spltest.MockHTTPClient) *ingestorClusterPodManager {
-	newSplunkClientForQueuePipeline := func(uri, user, pass string) *splclient.SplunkClient {
-		return &splclient.SplunkClient{
-			ManagementURI: uri,
-			Username:      user,
-			Password:      pass,
-			Client:        mockHTTPClient,
-		}
-	}
-	return &ingestorClusterPodManager{
-		newSplunkClient: newSplunkClientForQueuePipeline,
-	}
+	// For indexer, no indexerPipe stanza
+	config = getPipelineInputsForConfFile(true)
+	assert.Equal(t, 5, len(config))
 }

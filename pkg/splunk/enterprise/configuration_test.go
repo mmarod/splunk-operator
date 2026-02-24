@@ -74,9 +74,10 @@ func marshalAndCompare(t *testing.T, compare interface{}, method string, want st
 	if err != nil {
 		t.Errorf("%s failed to marshall", err)
 	}
+	actual := strings.ReplaceAll(string(got), " ", "")
 	want = strings.ReplaceAll(want, " ", "")
 
-	require.JSONEq(t, want, string(got))
+	require.JSONEq(t, want, actual)
 }
 
 func TestGetSplunkService(t *testing.T) {

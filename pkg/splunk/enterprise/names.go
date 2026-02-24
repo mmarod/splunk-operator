@@ -218,6 +218,27 @@ access = read : [ * ], write : [ admin ]
 	telLicenseInfoKey = "license_info"
 
 	managerConfigMapTemplateStr = "%smanager-config"
+
+	// ingestorQueueConfigAppName is the Splunk app name for ingestor queue config
+	ingestorQueueConfigAppName = "100-sok-ingestorcluster"
+
+	// ingestorQueueConfigTemplateStr is the ConfigMap name pattern for ingestor queue config
+	ingestorQueueConfigTemplateStr = "splunk-%s-ingestor-queue-config"
+
+	// ingestorQueueConfigRevAnnotation is the pod annotation key for tracking ConfigMap revisions
+	ingestorQueueConfigRevAnnotation = "ingestorQueueConfigRev"
+
+	// ingestorQueueConfigMountPath is the intermediate mount path for the queue config ConfigMap
+	ingestorQueueConfigMountPath = "/mnt/splunk-queue-config"
+
+	// commandForIngestorQueueConfig is the init container command to create the app directory structure
+	// and symlink files from the ConfigMap mount into the app
+	commandForIngestorQueueConfig = "mkdir -p /opt/splk/etc/apps/100-sok-ingestorcluster/local && " +
+		"mkdir -p /opt/splk/etc/apps/100-sok-ingestorcluster/metadata && " +
+		"ln -sfn /mnt/splunk-queue-config/app.conf /opt/splk/etc/apps/100-sok-ingestorcluster/local/app.conf && " +
+		"ln -sfn /mnt/splunk-queue-config/outputs.conf /opt/splk/etc/apps/100-sok-ingestorcluster/local/outputs.conf && " +
+		"ln -sfn /mnt/splunk-queue-config/default-mode.conf /opt/splk/etc/apps/100-sok-ingestorcluster/local/default-mode.conf && " +
+		"ln -sfn /mnt/splunk-queue-config/local.meta /opt/splk/etc/apps/100-sok-ingestorcluster/metadata/local.meta"
 )
 
 const (
@@ -382,4 +403,9 @@ func GetTelemetryConfigMapName(namePrefix string) string {
 // GetManagerConfigMapName returns the name of manager configmap
 func GetManagerConfigMapName(namePrefix string) string {
 	return fmt.Sprintf(managerConfigMapTemplateStr, namePrefix)
+}
+
+// GetIngestorQueueConfigMapName returns the ConfigMap name for ingestor queue config
+func GetIngestorQueueConfigMapName(crName string) string {
+	return fmt.Sprintf(ingestorQueueConfigTemplateStr, crName)
 }
