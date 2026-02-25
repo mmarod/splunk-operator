@@ -10,7 +10,7 @@ Separation between ingestion and indexing services within Splunk Operator for Ku
 
 This separation enables:
 - Independent scaling: Match resource allocation to ingestion or indexing workload.
-- Data durability: Off‑load buffer management and retry logic to a durable message queue.
+- Data durability: Off-load buffer management and retry logic to a durable message queue.
 - Operational clarity: Separate monitoring dashboards for ingestion throughput vs indexing latency.
 
 ## Splunk Support
@@ -39,20 +39,38 @@ Queue inputs can be found in the table below. As of now, only SQS provider of me
 | provider   | string | [Required] Provider of message queue (Allowed values: sqs, sqs_cp) |
 | sqs   | SQS | [Required if provider=sqs or provider=sqs_cp] SQS message queue inputs  |
 
-SQS message queue inputs can be found in the table below.
+### SQS Spec
 
-| Key        | Type    | Description                                       |
-| ---------- | ------- | ------------------------------------------------- |
-| name   | string | [Required] Name of the queue |
-| authRegion   | string | [Required] Region where the queue is located  |
-| endpoint   | string | [Optional, if not provided formed based on authRegion] AWS SQS Service endpoint
-| dlq   | string | [Required] Name of the dead letter queue |
-| volumes | []VolumeSpec | [Optional] List of remote storage volumes used to mount the credentials for queue and bucket access (must contain s3_access_key and s3_secret_key) |
+| Key        | Type    | Splunk conf key | Description                                       |
+| ---------- | ------- | --------------- | ------------------------------------------------- |
+| name   | string | stanza name | [Required] Name of the queue |
+| authRegion   | string | `auth_region` | [Required] Region where the queue is located  |
+| endpoint   | string | `endpoint` | [Optional] AWS SQS Service endpoint |
+| dlq   | string | `dead_letter_queue.name` | [Required] Name of the dead letter queue |
+| volumes | []VolumeSpec | N/A | [Optional] List of remote storage volumes used to mount the credentials for queue and bucket access (must contain s3_access_key and s3_secret_key) |
+| maxConnections | *int32 | `max_connections` | [Optional] Maximum number of connections to the SQS service |
+| messageGroupID | string | `message_group_id` | [Optional] Message group ID for FIFO queues |
+| retryPolicy | string | `retry_policy` | [Optional] Retry policy for failed messages (Allowed values: max_count, none) |
+| maxRetriesPerPart | *int32 | `max_count.max_retries_per_part` | [Optional] Maximum retries per part when retryPolicy is max_count |
+| timeoutConnect | *int32 | `timeout.connect` | [Optional] Connection timeout in seconds |
+| timeoutRead | *int32 | `timeout.read` | [Optional] Read timeout in seconds |
+| timeoutWrite | *int32 | `timeout.write` | [Optional] Write timeout in seconds |
+| timeoutReceiveMessage | *int32 | `timeout.receive_message` | [Optional] Receive message timeout in seconds |
+| timeoutVisibility | *int32 | `timeout.visibility` | [Optional] Visibility timeout in seconds |
+| bufferVisibility | *int32 | `buffer.visibility` | [Optional] Buffer visibility in seconds |
+| executorMaxWorkersCount | *int32 | `executor_max_workers_count` | [Optional] Maximum number of executor worker threads |
+| minPendingMessages | *int32 | `min_pending_messages` | [Optional] Minimum number of pending messages before sending |
+| renewRetries | *int32 | `renew_retries` | [Optional] Number of retries for renewing message visibility |
+| encodingFormat | string | `encoding_format` | [Optional] Encoding format for messages (e.g. "s2s") |
+| sendInterval | string | `send_interval` | [Optional] Interval between send operations (e.g. "5s") |
+| dlqProcessInterval | string | `dead_letter_queue.process_interval` | [Optional] Dead letter queue process interval (e.g. "1d") |
+| enableSharedReceipts | *bool | `enable_shared_receipts` | [Optional] Whether to enable shared receipts |
 
-**SOK doesn't support update of any of the Queue inputs except from the volumes which allow the change of secrets.**
+All fields are mutable. Optional fields are only written to conf files when explicitly set on the CR. Fields that are not set are omitted entirely from the generated configuration, allowing Splunk defaults or values from other configuration layers (e.g. defaults.yaml) to take effect.
 
 ## Example
-```
+
+```yaml
 apiVersion: enterprise.splunk.com/v4
 kind: Queue
 metadata:
@@ -64,6 +82,30 @@ spec:
     authRegion: us-west-2
     endpoint: https://sqs.us-west-2.amazonaws.com
     dlq: sqs-dlq-test
+    volumes:
+      - name: s3-sqs-volume
+        secretRef: s3-secret
+```
+
+Example with optional tuning fields:
+
+```yaml
+apiVersion: enterprise.splunk.com/v4
+kind: Queue
+metadata:
+  name: queue
+spec:
+  provider: sqs
+  sqs:
+    name: sqs-test
+    authRegion: us-west-2
+    endpoint: https://sqs.us-west-2.amazonaws.com
+    dlq: sqs-dlq-test
+    retryPolicy: max_count
+    maxRetriesPerPart: 4
+    encodingFormat: s2s
+    sendInterval: "5s"
+    enableSharedReceipts: true
     volumes:
       - name: s3-sqs-volume
         secretRef: s3-secret
@@ -82,17 +124,30 @@ ObjectStorage inputs can be found in the table below. As of now, only S3 provide
 | provider   | string | [Required] Provider of object storage (Allowed values: s3) |
 | s3   | S3 | [Required if provider=s3] S3 object storage inputs  |
 
-S3 object storage inputs can be found in the table below.
+### S3 Spec
 
-| Key        | Type    | Description                                       |
-| ---------- | ------- | ------------------------------------------------- |
-| path   | string | [Required] Remote storage location for messages that are larger than the underlying maximum message size  |
-| endpoint   | string | [Optional, if not provided formed based on authRegion] S3-compatible service endpoint
+| Key        | Type    | Splunk conf key suffix | Description                                       |
+| ---------- | ------- | ---------------------- | ------------------------------------------------- |
+| path   | string | `large_message_store.path` | [Required] Remote storage location for messages that are larger than the underlying maximum message size  |
+| endpoint   | string | `large_message_store.endpoint` | [Optional] S3-compatible service endpoint |
+| sslVerifyServerCert | *bool | `large_message_store.sslVerifyServerCert` | [Optional] Whether to verify the server's SSL certificate |
+| sslVersions | string | `large_message_store.sslVersions` | [Optional] Comma-separated list of SSL versions to support |
+| sslCommonNameToCheck | string | `large_message_store.sslCommonNameToCheck` | [Optional] Common name to check in the server's SSL certificate |
+| sslAltNameToCheck | string | `large_message_store.sslAltNameToCheck` | [Optional] Alternate name to check in the server's SSL certificate |
+| sslRootCAPath | string | `large_message_store.sslRootCAPath` | [Optional] Path to the root CA certificate file inside the Splunk container (must be mounted via volumes) |
+| cipherSuite | string | `large_message_store.cipherSuite` | [Optional] Cipher suite string for SSL connections |
+| ecdhCurves | string | `large_message_store.ecdhCurves` | [Optional] ECDH curves for SSL connections |
+| dhFile | string | `large_message_store.dhFile` | [Optional] Path to the Diffie-Hellman parameter file inside the Splunk container (must be mounted via volumes) |
+| encryptionScheme | string | `large_message_store.encryption_scheme` | [Optional] Encryption scheme for data at rest (e.g. "SSE-S3", "SSE-KMS") |
+| kmsEndpoint | string | `large_message_store.kms_endpoint` | [Optional] KMS endpoint URL for encryption key management |
+| keyID | string | `large_message_store.key_id` | [Optional] KMS key ID for encryption |
+| keyRefreshInterval | string | `large_message_store.key_refresh_interval` | [Optional] Interval for refreshing the encryption key (e.g. "1d") |
 
-**SOK doesn't support update of any of the ObjectStorage inputs.**
+All fields are mutable. Optional fields are only written to conf files when explicitly set on the CR.
 
 ## Example
-```
+
+```yaml
 apiVersion: enterprise.splunk.com/v4
 kind: ObjectStorage
 metadata:
@@ -106,7 +161,7 @@ spec:
 
 # IngestorCluster
 
-IngestorCluster is introduced for high‑throughput data ingestion into a durable message queue. Its Splunk pods are configured to receive events (outputs.conf) and publish them to a message queue. 
+IngestorCluster is introduced for high-throughput data ingestion into a durable message queue. Its Splunk pods are configured to receive events (outputs.conf) and publish them to a message queue.
 
 ## Spec
 
@@ -118,17 +173,17 @@ In addition to common spec inputs, the IngestorCluster resource provides the fol
 | queueRef   | corev1.ObjectReference | Message queue reference |
 | objectStorageRef   | corev1.ObjectReference | Object storage reference |
 
-**SOK doesn't support update of queueRef and objectStorageRef.**
+All fields are mutable. Changing queueRef or objectStorageRef triggers an in-place reload without pod restart.
 
 **First provisioning or scaling up the number of replicas requires Ingestor Cluster Splunkd restart, but this restart is implemented automatically and done by SOK.**
 
 ## Example
 
-The example presented below configures IngestorCluster named ingestor with Splunk ${SPLUNK_IMAGE_VERSION} image that resides in a default namespace and is scaled to 3 replicas that serve the ingestion traffic. This IngestorCluster custom resource is set up with the s3-secret credentials allowing it to perform SQS and S3 operations. Queue and ObjectStorage references allow the user to specify queue and bucket settings for the ingestion process. 
+The example presented below configures IngestorCluster named ingestor with Splunk ${SPLUNK_IMAGE_VERSION} image that resides in a default namespace and is scaled to 3 replicas that serve the ingestion traffic. This IngestorCluster custom resource is set up with the s3-secret credentials allowing it to perform SQS and S3 operations. Queue and ObjectStorage references allow the user to specify queue and bucket settings for the ingestion process.
 
 In this case, the setup uses the SQS and S3 based configuration where the messages are stored in sqs-test queue in us-west-2 region with dead letter queue set to sqs-dlq-test queue. The object storage is set to ingestion bucket in smartbus-test directory. Based on these inputs, default-mode.conf and outputs.conf files are configured accordingly.
 
-```
+```yaml
 apiVersion: enterprise.splunk.com/v4
 kind: IngestorCluster
 metadata:
@@ -136,7 +191,7 @@ metadata:
   finalizers:
     - enterprise.splunk.com/delete-pvc
 spec:
-  serviceAccount: ingestor-sa 
+  serviceAccount: ingestor-sa
   replicas: 3
   image: splunk/splunk:${SPLUNK_IMAGE_VERSION}
   queueRef:
@@ -163,17 +218,20 @@ The operator creates a ConfigMap named `splunk-<name>-ingestor-queue-config` con
     local.meta          # ACLs + install_source_checksum for reload detection
 ```
 
-An init container runs on each pod at startup to create the app directory structure under `/opt/splunk/etc/apps/`. The conf files (`app.conf`, `outputs.conf`, `default-mode.conf`) are symlinked from the ConfigMap mount at `/mnt/splunk-queue-config/`, so Kubernetes propagates content updates in-place. `local.meta` is copied (not symlinked) because Splunk writes its own metadata stanzas into this file at runtime, which would break a symlink to the read-only ConfigMap mount.
+An init container runs on each pod at startup to create the app directory structure under `/opt/splunk/etc/apps/`. All four conf files are copied (not symlinked) from the ConfigMap mount at `/mnt/splunk-queue-config/` into the app directory. Copies are used instead of symlinks because Splunk replaces symlinks with regular files when it modifies content (e.g. encrypting credentials in outputs.conf, writing metadata stanzas in local.meta).
 
 ### Reload on change
 
-When Queue or ObjectStorage configuration changes, the operator updates the ConfigMap and triggers an in-place reload rather than rolling all pods:
+When Queue or ObjectStorage configuration changes, the operator updates the ConfigMap and triggers an in-place reload using a deferred checksum-based mechanism:
 
 1. The operator computes a SHA-256 checksum of `outputs.conf` + `default-mode.conf` and embeds it in `local.meta` as an `install_source_checksum` stanza.
 2. `ApplyConfigMap` compares the new ConfigMap data against the existing data in etcd and returns whether anything changed.
-3. If the data changed and the IngestorCluster is in `PhaseReady`, the operator executes two commands on each pod via `kubectl exec`:
-   - Copies the updated `local.meta` from the ConfigMap mount into the app's metadata directory.
+3. If the data changed and the IngestorCluster is in `PhaseReady`, the operator stores the expected checksum in `cr.Status.QueueConfigExpectedChecksum` and requeues after 5 seconds. This delay allows the kubelet to propagate the ConfigMap update to the volume mount on each pod.
+4. On subsequent reconciles, the operator execs into pod 0 and reads the mounted `local.meta` to verify the expected checksum is present. If the mount has not yet propagated, the operator requeues again (indefinitely, every 5 seconds) until the content matches.
+5. Once the mount is current, the operator executes two commands on each pod via `kubectl exec`:
+   - Copies all conf files from the ConfigMap mount into the app directory.
    - POSTs to `/services/apps/local/_reload` on `localhost:8089`, which causes Splunk to detect the changed `install_source_checksum` and reload the app's conf files.
+6. The operator clears `QueueConfigExpectedChecksum` from the status to indicate the reload is complete.
 
 This avoids a full StatefulSet rolling restart for configuration-only changes. Pod restarts are only needed when the StatefulSet spec itself changes (image, resources, volumes, etc.).
 
@@ -182,13 +240,14 @@ This avoids a full StatefulSet rolling restart for configuration-only changes. P
 To verify the reload mechanism is working:
 
 - **Operator logs**: Look for `Successfully triggered app reload on ingestor pods` after a Queue/ObjectStorage change.
+- **Operator logs (propagation)**: Look for `ConfigMap changed, waiting for volume mount propagation` followed by `Volume mount not yet propagated, requeuing` (zero or more times) until propagation completes.
 - **Pod age**: Should remain unchanged after a config update (no restart).
 - **ConfigMap content**: `kubectl get configmap splunk-<name>-ingestor-queue-config -o jsonpath='{.data.local\.meta}'` should show the `install_source_checksum` stanza.
 - **Splunk access log**: Should show a `POST /services/apps/local/_reload` entry with a `200` response.
 
 # IndexerCluster
 
-IndexerCluster is enhanced to support index‑only mode enabling independent scaling, loss‑safe buffering, and simplified day‑0/day‑n management via Kubernetes CRDs. Its Splunk pods are configured to pull events from the queue (inputs.conf) and index them.
+IndexerCluster is enhanced to support index-only mode enabling independent scaling, loss-safe buffering, and simplified day-0/day-n management via Kubernetes CRDs. Its Splunk pods are configured to pull events from the queue (inputs.conf) and index them.
 
 ## Spec
 
@@ -200,17 +259,17 @@ In addition to common spec inputs, the IndexerCluster resource provides the foll
 | queueRef   | corev1.ObjectReference | Message queue reference |
 | objectStorageRef   | corev1.ObjectReference | Object storage reference |
 
-**SOK doesn't support update of queueRef and objectStorageRef.**
+All fields are mutable.
 
 **First provisioning or scaling up the number of replicas requires Indexer Cluster Splunkd restart, but this restart is implemented automatically and done by SOK.**
 
 ## Example
 
-The example presented below configures IndexerCluster named indexer with Splunk ${SPLUNK_IMAGE_VERSION} image that resides in a default namespace and is scaled to 3 replicas that serve the indexing traffic. This IndexerCluster custom resource is set up with the s3-secret credentials allowing it to perform SQS and S3 operations. Queue and ObjectStorage references allow the user to specify queue and bucket settings for the indexing process. 
+The example presented below configures IndexerCluster named indexer with Splunk ${SPLUNK_IMAGE_VERSION} image that resides in a default namespace and is scaled to 3 replicas that serve the indexing traffic. This IndexerCluster custom resource is set up with the s3-secret credentials allowing it to perform SQS and S3 operations. Queue and ObjectStorage references allow the user to specify queue and bucket settings for the indexing process.
 
 In this case, the setup uses the SQS and S3 based configuration where the messages are stored in and retrieved from sqs-test queue in us-west-2 region with dead letter queue set to sqs-dlq-test queue. The object storage is set to ingestion bucket in smartbus-test directory. Based on these inputs, default-mode.conf, inputs.conf and outputs.conf files are configured accordingly.
 
-```
+```yaml
 apiVersion: enterprise.splunk.com/v4
 kind: ClusterManager
 metadata:
@@ -218,7 +277,7 @@ metadata:
   finalizers:
     - enterprise.splunk.com/delete-pvc
 spec:
-  serviceAccount: ingestor-sa 
+  serviceAccount: ingestor-sa
   image: splunk/splunk:${SPLUNK_IMAGE_VERSION}
 ---
 apiVersion: enterprise.splunk.com/v4
@@ -231,7 +290,7 @@ spec:
   clusterManagerRef:
     name: cm
   serviceAccount: ingestor-sa
-  replicas: 3 
+  replicas: 3
   image: splunk/splunk:${SPLUNK_IMAGE_VERSION}
   queueRef:
     name: queue
@@ -251,7 +310,7 @@ Queue, ObjectStorage and IngestorCluster have been added to the splunk/splunk-en
 
 Below examples describe how to define values for Queue, ObjectStorage, IngestorCluster and IndexerCluster similarly to the above yaml files specifications.
 
-```
+```yaml
 queue:
   enabled: true
   name: queue
@@ -266,7 +325,7 @@ queue:
           secretRef: s3-secret
 ```
 
-```
+```yaml
 objectStorage:
   enabled: true
   name: os
@@ -276,30 +335,30 @@ objectStorage:
     path: ingestion/smartbus-test
 ```
 
-```
+```yaml
 ingestorCluster:
   enabled: true
   name: ingestor
   replicaCount: 3
-  serviceAccount: ingestor-sa 
+  serviceAccount: ingestor-sa
   queueRef:
     name: queue
   objectStorageRef:
     name: os
 ```
 
-```
+```yaml
 clusterManager:
   enabled: true
   name: cm
   replicaCount: 1
-  serviceAccount: ingestor-sa 
+  serviceAccount: ingestor-sa
 
 indexerCluster:
   enabled: true
   name: indexer
   replicaCount: 3
-  serviceAccount: ingestor-sa 
+  serviceAccount: ingestor-sa
   clusterManagerRef:
     name: cm
   queueRef:
@@ -314,10 +373,10 @@ To be able to configure ingestion and indexing resources correctly in a secure m
 
 ## Example
 
-The example presented below configures the ingestor-sa service account by using eksctl utility. It sets up the service account for cluster-name cluster in region us-west-2 with AmazonS3FullAccess and AmazonSQSFullAccess access policies. 
+The example presented below configures the ingestor-sa service account by using eksctl utility. It sets up the service account for cluster-name cluster in region us-west-2 with AmazonS3FullAccess and AmazonSQSFullAccess access policies.
 
 ```
-eksctl create iamserviceaccount \                                                                                                                                          
+eksctl create iamserviceaccount \
   --name ingestor-sa \
   --cluster ind-ing-sep-demo \
   --region us-west-2 \
@@ -327,102 +386,19 @@ eksctl create iamserviceaccount \
   --override-existing-serviceaccounts
 ```
 
-```
-$ kubectl describe sa ingestor-sa                                                                                                                      
-Name:                ingestor-sa
-Namespace:           default
-Labels:              app.kubernetes.io/managed-by=eksctl
-Annotations:         eks.amazonaws.com/role-arn: arn:aws:iam::111111111111:role/eksctl-ind-ing-sep-demo-addon-iamserviceac-Role1-123456789123
-Image pull secrets:  <none>
-Mountable secrets:   <none>
-Tokens:              <none>
-Events:              <none>
-```
-
-```
-$ aws iam get-role --role-name eksctl-ind-ing-sep-demo-addon-iamserviceac-Role1-123456789123
-{
-    "Role": {
-        "Path": "/",
-        "RoleName": "eksctl-ind-ing-sep-demo-addon-iamserviceac-Role1-123456789123",
-        "RoleId": "123456789012345678901",
-        "Arn": "arn:aws:iam::111111111111:role/eksctl-ind-ing-sep-demo-addon-iamserviceac-Role1-123456789123",
-        "CreateDate": "2025-08-07T12:03:31+00:00",
-        "AssumeRolePolicyDocument": {
-            "Version": "2012-10-17",
-            "Statement": [
-                {
-                    "Effect": "Allow",
-                    "Principal": {
-                        "Federated": "arn:aws:iam::111111111111:oidc-provider/oidc.eks.us-west-2.amazonaws.com/id/1234567890123456789012345678901"
-                    },
-                    "Action": "sts:AssumeRoleWithWebIdentity",
-                    "Condition": {
-                        "StringEquals": {
-                            "oidc.eks.us-west-2.amazonaws.com/id/1234567890123456789012345678901:aud": "sts.amazonaws.com",
-                            "oidc.eks.us-west-2.amazonaws.com/id/1234567890123456789012345678901:sub": "system:serviceaccount:default:ingestor-sa"
-                        }
-                    }
-                }
-            ]
-        },
-        "Description": "",
-        "MaxSessionDuration": 3600,
-        "Tags": [
-            {
-                "Key": "alpha.eksctl.io/cluster-name",
-                "Value": "ind-ing-sep-demo"
-            },
-            {
-                "Key": "alpha.eksctl.io/iamserviceaccount-name",
-                "Value": "default/ingestor-sa"
-            },
-            {
-                "Key": "alpha.eksctl.io/eksctl-version",
-                "Value": "0.211.0"
-            },
-            {
-                "Key": "eksctl.cluster.k8s.io/v1alpha1/cluster-name",
-                "Value": "ind-ing-sep-demo"
-            }
-        ],
-        "RoleLastUsed": {
-            "LastUsedDate": "2025-08-18T08:47:27+00:00",
-            "Region": "us-west-2"
-        }
-    }
-}
-```
-
-```
-$ aws iam list-attached-role-policies --role-name eksctl-cluster-name-addon-iamserviceac-Role1-123456789123
-{
-    "AttachedPolicies": [
-        {
-            "PolicyName": "AmazonSQSFullAccess",
-            "PolicyArn": "arn:aws:iam::aws:policy/AmazonSQSFullAccess"
-        },
-        {
-            "PolicyName": "AmazonS3FullAccess",
-            "PolicyArn": "arn:aws:iam::aws:policy/AmazonS3FullAccess"
-        }
-    ]
-}
-```
-
 ## Documentation References
 
 - [IAM Roles for Service Accounts on eksctl Docs](https://eksctl.io/usage/iamserviceaccounts/)
 
 # Horizontal Pod Autoscaler
 
-To automatically adjust the number of replicas to serve the ingestion traffic effectively, it is recommended to use Horizontal Pod Autoscaler which scales the workload based on the actual demand. It enables the user to provide the metrics which are used to make decisions on removing unwanted replicas if there is not too much traffic or setting up the new ones if the traffic is too big to be handled by currently running resources. 
+To automatically adjust the number of replicas to serve the ingestion traffic effectively, it is recommended to use Horizontal Pod Autoscaler which scales the workload based on the actual demand. It enables the user to provide the metrics which are used to make decisions on removing unwanted replicas if there is not too much traffic or setting up the new ones if the traffic is too big to be handled by currently running resources.
 
 ## Example
 
-The exmaple presented below configures HorizontalPodAutoscaler named ingestor-hpa that resides in a default namespace (same namespace as resources it is managing) to scale IngestorCluster custom resource named ingestor. With average utilization set to 50, the HorizontalPodAutoscaler resource will try to keep the average utilization of the pods in the scaling target at 50%. It will be able to scale the replicas starting from the minimum number of 3 with the maximum number of 10 replicas.
+The example presented below configures HorizontalPodAutoscaler named ingestor-hpa that resides in a default namespace (same namespace as resources it is managing) to scale IngestorCluster custom resource named ingestor. With average utilization set to 50, the HorizontalPodAutoscaler resource will try to keep the average utilization of the pods in the scaling target at 50%. It will be able to scale the replicas starting from the minimum number of 3 with the maximum number of 10 replicas.
 
-```                             
+```yaml
 apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
 metadata:
@@ -447,57 +423,11 @@ spec:
 
 - [Horizontal Pod Autoscaling on Kubernetes Docs](https://kubernetes.io/docs/tasks/run-application/horizontal-pod-autoscale/)
 
-# Grafana
-
-In order to monitor the resources, Grafana could be installed and configured on the cluster to present the setup on a dashabord in a series of useful diagrams and metrics. 
-
-## Example
-
-In the following example, the dashboard presents ingestion and indexing data in the form of useful diagrams and metrics such as number of replicas or resource consumption. 
-
-```
-{
-  "id": null,
-  "uid": "splunk-autoscale",
-  "title": "Splunk Ingestion & Indexer Autoscaling with I/O & PV",
-  "schemaVersion": 27,
-  "version": 12,
-  "refresh": "5s",
-  "time": { "from": "now-30m", "to": "now" },
-  "timezone": "browser",
-  "style": "dark",
-  "tags": ["splunk","autoscale","ingestion","indexer","io","pv"],
-  "graphTooltip": 1,
-  "panels": [
-    { "id": 1,  "type": "stat",       "title": "Ingestion Replicas",       "gridPos": {"x":0,"y":0,"w":4,"h":4}, "targets":[{"expr":"kube_statefulset_replicas{namespace=\"default\",statefulset=\"splunk-ingestor-ingestor\"}"}], "options": {"reduceOptions":{"calcs":["last"]},"orientation":"horizontal","colorMode":"value","graphMode":"none","textMode":"value","thresholds":{"mode":"absolute","steps":[{"value":null,"color":"#73BF69"},{"value":5,"color":"#EAB839"},{"value":8,"color":"#BF1B00"}]}}},
-    { "id": 2,  "type": "stat",       "title": "Indexer Replicas",       "gridPos": {"x":4,"y":0,"w":4,"h":4}, "targets":[{"expr":"kube_statefulset_replicas{namespace=\"default\",statefulset=\"splunk-indexer-indexer\"}"}], "options": {"reduceOptions":{"calcs":["last"]},"orientation":"horizontal","colorMode":"value","graphMode":"none","textMode":"value","thresholds":{"mode":"absolute","steps":[{"value":null,"color":"#73BF69"},{"value":5,"color":"#EAB839"},{"value":8,"color":"#BF1B00"}]}}},
-    { "id": 3,  "type": "timeseries","title": "Ingestion CPU (cores)","gridPos": {"x":8,"y":0,"w":8,"h":4},"targets":[{"expr":"sum(rate(container_cpu_usage_seconds_total{namespace=\"default\",pod=~\"splunk-ingestor-ingestor-.*\"}[1m]))","legendFormat":"CPU (cores)"}],"options":{"legend":{"displayMode":"list","placement":"bottom"},"yAxis":{"mode":"auto"},"color":{"mode":"fixed","fixedColor":"#FFA600"}}},
-    { "id": 4,  "type": "timeseries","title": "Ingestion Memory (MiB)","gridPos": {"x":16,"y":0,"w":8,"h":4},"targets":[{"expr":"sum(container_memory_usage_bytes{namespace=\"default\",pod=~\"splunk-ingestor-ingestor-.*\"}) / 1024 / 1024","legendFormat":"Memory (MiB)"}],"options":{"legend":{"displayMode":"list","placement":"bottom"},"yAxis":{"mode":"auto"},"color":{"mode":"fixed","fixedColor":"#00AF91"}}},
-    { "id": 5,  "type": "timeseries","title": "Ingestion Network In (KB/s)","gridPos": {"x":0,"y":8,"w":8,"h":4},"targets":[{"expr":"sum(rate(container_network_receive_bytes_total{namespace=\"default\",pod=~\"splunk-ingestor-ingestor-.*\"}[1m])) / 1024","legendFormat":"Net In (KB/s)"}],"options":{"legend":{"displayMode":"list","placement":"bottom"},"yAxis":{"mode":"auto"},"color":{"mode":"fixed","fixedColor":"#59A14F"}}},
-    { "id": 6,  "type": "timeseries","title": "Ingestion Network Out (KB/s)","gridPos": {"x":8,"y":8,"w":8,"h":4},"targets":[{"expr":"sum(rate(container_network_transmit_bytes_total{namespace=\"default\",pod=~\"splunk-ingestor-ingestor-.*\"}[1m])) / 1024","legendFormat":"Net Out (KB/s)"}],"options":{"legend":{"displayMode":"list","placement":"bottom"},"yAxis":{"mode":"auto"},"color":{"mode":"fixed","fixedColor":"#E15759"}}},
-    { "id": 7,  "type": "timeseries","title": "Indexer CPU (cores)","gridPos": {"x":16,"y":4,"w":8,"h":4},"targets":[{"expr":"sum(rate(container_cpu_usage_seconds_total{namespace=\"default\",pod=~\"splunk-indexer-indexer-.*\"}[1m]))","legendFormat":"CPU (cores)"}],"options":{"legend":{"displayMode":"list","placement":"bottom"},"yAxis":{"mode":"auto"},"color":{"mode":"fixed","fixedColor":"#7D4E57"}}},
-    { "id":8,  "type": "timeseries","title": "Indexer Memory (MiB)","gridPos": {"x":0,"y":12,"w":8,"h":4},"targets":[{"expr":"sum(container_memory_usage_bytes{namespace=\"default\",pod=~\"splunk-indexer-indexer-.*\"}) / 1024 / 1024","legendFormat":"Memory (MiB)"}],"options":{"legend":{"displayMode":"list","placement":"bottom"},"yAxis":{"mode":"auto"},"color":{"mode":"fixed","fixedColor":"#4E79A7"}}},
-    { "id":9,  "type": "timeseries","title": "Indexer Network In (KB/s)","gridPos": {"x":8,"y":12,"w":8,"h":4},"targets":[{"expr":"sum(rate(container_network_receive_bytes_total{namespace=\"default\",pod=~\"splunk-indexer-indexer-.*\"}[1m])) / 1024","legendFormat":"Net In (KB/s)"}],"options":{"legend":{"displayMode":"list","placement":"bottom"},"yAxis":{"mode":"auto"},"color":{"mode":"fixed","fixedColor":"#9467BD"}}},
-    { "id":10,  "type": "timeseries","title": "Indexer Network Out (KB/s)","gridPos": {"x":16,"y":12,"w":8,"h":4},"targets":[{"expr":"sum(rate(container_network_transmit_bytes_total{namespace=\"default\",pod=~\"splunk-indexer-indexer-.*\"}[1m])) / 1024","legendFormat":"Net Out (KB/s)"}],"options":{"legend":{"displayMode":"list","placement":"bottom"},"yAxis":{"mode":"auto"},"color":{"mode":"fixed","fixedColor":"#8C564B"}}},
-    { "id":11,  "type": "timeseries","title": "Ingestion Disk Read (KB/s)","gridPos": {"x":0,"y":16,"w":8,"h":4},"targets":[{"expr":"sum(rate(container_fs_reads_bytes_total{namespace=\"default\",pod=~\"splunk-ingestor-ingestor-.*\"}[1m])) / 1024","legendFormat":"Disk Read (KB/s)"}],"options":{"legend":{"displayMode":"list","placement":"bottom"},"yAxis":{"mode":"auto"},"color":{"mode":"fixed","fixedColor":"#1F77B4"}}},
-    { "id":12,  "type": "timeseries","title": "Ingestion Disk Write (KB/s)","gridPos": {"x":8,"y":16,"w":8,"h":4},"targets":[{"expr":"sum(rate(container_fs_writes_bytes_total{namespace=\"default\",pod=~\"splunk-ingestor-ingestor-.*\"}[1m])) / 1024","legendFormat":"Disk Write (KB/s)"}],"options":{"legend":{"displayMode":"list","placement":"bottom"},"yAxis":{"mode":"auto"},"color":{"mode":"fixed","fixedColor":"#FF7F0E"}}},
-    { "id":13,  "type": "timeseries","title": "Indexer PV Usage (GiB)","gridPos": {"x":0,"y":20,"w":8,"h":4},"targets":[{"expr":"kubelet_volume_stats_used_bytes{namespace=\"default\",persistentvolumeclaim=~\".*-indexer-.*\"} / 1024 / 1024 / 1024","legendFormat":"Used GiB"},{"expr":"kubelet_volume_stats_capacity_bytes{namespace=\"default\",persistentvolumeclaim=~\".*-indexer-.*\"} / 1024 / 1024 / 1024","legendFormat":"Capacity GiB"}],"options":{"legend":{"displayMode":"list","placement":"bottom"},"yAxis":{"mode":"auto"}}},
-    { "id":14,  "type": "timeseries","title": "Ingestion PV Usage (GiB)","gridPos": {"x":8,"y":20,"w":8,"h":4},"targets":[{"expr":"kubelet_volume_stats_used_bytes{namespace=\"default\",persistentvolumeclaim=~\".*-ingestor-.*\"} / 1024 / 1024 / 1024","legendFormat":"Used GiB"},{"expr":"kubelet_volume_stats_capacity_bytes{namespace=\"default\",persistentvolumeclaim=~\".*-ingestor-.*\"} / 1024 / 1024 / 1024","legendFormat":"Capacity GiB"}],"options":{"legend":{"displayMode":"list","placement":"bottom"},"yAxis":{"mode":"auto"}}}
-  ]
-}
-```
-
-## Documentation References
-
-- [kube-prometheus-stack](https://github.com/prometheus-community/helm-charts/tree/main/charts/kube-prometheus-stack)
-
 # App Installation for Ingestor Cluster Instances
 
-Application installation is supported for Ingestor Cluster instances. However, as of now, applications are installed using local scope and if any application requires Splunk restart, there is no automated way to detect it and trigger automatically via Splunk Operator. 
+Application installation is supported for Ingestor Cluster instances. However, as of now, applications are installed using local scope and if any application requires Splunk restart, there is no automated way to detect it and trigger automatically via Splunk Operator.
 
-Therefore, to be able to enforce Splunk restart for each of the Ingestor Cluster pods, it is recommended to add/update IngestorCluster CR annotations/labels and apply the new configuration which will trigger the rolling restart of Splunk pods for Ingestor Cluster. 
-
-Ideally, update of annotations and labels should not trigger pod restart at all and it is under the investigation on how to stop this from happening and handle restart automatically.
+Therefore, to be able to enforce Splunk restart for each of the Ingestor Cluster pods, it is recommended to add/update IngestorCluster CR annotations/labels and apply the new configuration which will trigger the rolling restart of Splunk pods for Ingestor Cluster.
 
 # Example
 
@@ -514,7 +444,7 @@ $ kubectl apply -f ${SOK_IMAGE_VERSION}/splunk-operator-cluster.yaml --server-si
 ```
 
 ```
-$ kubectl get po -n splunk-operator                          
+$ kubectl get po -n splunk-operator
 NAME                                                  READY   STATUS    RESTARTS   AGE
 splunk-operator-controller-manager-785b89d45c-dwfkd   2/2     Running   0          4d3h
 ```
@@ -522,7 +452,7 @@ splunk-operator-controller-manager-785b89d45c-dwfkd   2/2     Running   0       
 2. Create a service account.
 
 ```
-$ eksctl create iamserviceaccount \                                                                                                                                          
+$ eksctl create iamserviceaccount \
   --name ingestor-sa \
   --cluster ind-ing-sep-demo \
   --region us-west-2 \
@@ -532,93 +462,10 @@ $ eksctl create iamserviceaccount \
   --override-existing-serviceaccounts
 ```
 
-```
-$ kubectl describe sa ingestor-sa                                                                                                                      
-Name:                ingestor-sa
-Namespace:           default
-Labels:              app.kubernetes.io/managed-by=eksctl
-Annotations:         eks.amazonaws.com/role-arn: arn:aws:iam::111111111111:role/eksctl-ind-ing-sep-demo-addon-iamserviceac-Role1-123456789123
-Image pull secrets:  <none>
-Mountable secrets:   <none>
-Tokens:              <none>
-Events:              <none>
-```
-
-```
-$ aws iam get-role --role-name eksctl-ind-ing-sep-demo-addon-iamserviceac-Role1-123456789123
-{
-    "Role": {
-        "Path": "/",
-        "RoleName": "eksctl-ind-ing-sep-demo-addon-iamserviceac-Role1-123456789123",
-        "RoleId": "123456789012345678901",
-        "Arn": "arn:aws:iam::111111111111:role/eksctl-ind-ing-sep-demo-addon-iamserviceac-Role1-123456789123",
-        "CreateDate": "2025-08-07T12:03:31+00:00",
-        "AssumeRolePolicyDocument": {
-            "Version": "2012-10-17",
-            "Statement": [
-                {
-                    "Effect": "Allow",
-                    "Principal": {
-                        "Federated": "arn:aws:iam::111111111111:oidc-provider/oidc.eks.us-west-2.amazonaws.com/id/1234567890123456789012345678901"
-                    },
-                    "Action": "sts:AssumeRoleWithWebIdentity",
-                    "Condition": {
-                        "StringEquals": {
-                            "oidc.eks.us-west-2.amazonaws.com/id/1234567890123456789012345678901:aud": "sts.amazonaws.com",
-                            "oidc.eks.us-west-2.amazonaws.com/id/1234567890123456789012345678901:sub": "system:serviceaccount:default:ingestor-sa"
-                        }
-                    }
-                }
-            ]
-        },
-        "Description": "",
-        "MaxSessionDuration": 3600,
-        "Tags": [
-            {
-                "Key": "alpha.eksctl.io/cluster-name",
-                "Value": "ind-ing-sep-demo"
-            },
-            {
-                "Key": "alpha.eksctl.io/iamserviceaccount-name",
-                "Value": "default/ingestor-sa"
-            },
-            {
-                "Key": "alpha.eksctl.io/eksctl-version",
-                "Value": "0.211.0"
-            },
-            {
-                "Key": "eksctl.cluster.k8s.io/v1alpha1/cluster-name",
-                "Value": "ind-ing-sep-demo"
-            }
-        ],
-        "RoleLastUsed": {
-            "LastUsedDate": "2025-08-18T08:47:27+00:00",
-            "Region": "us-west-2"
-        }
-    }
-}
-```
-
-```
-$ aws iam list-attached-role-policies --role-name eksctl-ind-ing-sep-demo-addon-iamserviceac-Role1-123456789123
-{
-    "AttachedPolicies": [
-        {
-            "PolicyName": "AmazonSQSFullAccess",
-            "PolicyArn": "arn:aws:iam::aws:policy/AmazonSQSFullAccess"
-        },
-        {
-            "PolicyName": "AmazonS3FullAccess",
-            "PolicyArn": "arn:aws:iam::aws:policy/AmazonS3FullAccess"
-        }
-    ]
-}
-```
-
 3. Install Queue resource.
 
 ```
-$ cat queue.yaml          
+$ cat queue.yaml
 apiVersion: enterprise.splunk.com/v4
 kind: Queue
 metadata:
@@ -635,48 +482,19 @@ spec:
 ```
 
 ```
-$ kubectl apply -f queue.yaml     
+$ kubectl apply -f queue.yaml
 ```
 
 ```
-$ kubectl get queue                        
+$ kubectl get queue
 NAME   PHASE   AGE   MESSAGE
-queue  Ready   20s  
-```
-
-```
-kubectl describe queue                               
-Name:         queue
-Namespace:    default
-Labels:       <none>
-Annotations:  <none>
-API Version:  enterprise.splunk.com/v4
-Kind:         Queue
-Metadata:
-  Creation Timestamp:  2025-10-27T10:25:53Z
-  Finalizers:
-    enterprise.splunk.com/delete-pvc
-  Generation:        1
-  Resource Version:  12345678
-  UID:               12345678-1234-5678-1234-012345678911
-Spec:
-  Sqs:
-    Auth Region:                        us-west-2
-    DLQ:                           sqs-dlq-test
-    Endpoint:                      https://sqs.us-west-2.amazonaws.com
-    Name:                          sqs-test
-  Provider:                        sqs
-Status:
-  Message:  
-  Phase:    Ready
-  Resource Rev Map:
-Events:  <none>
+queue  Ready   20s
 ```
 
 4. Install ObjectStorage resource.
 
 ```
-$ cat os.yaml          
+$ cat os.yaml
 apiVersion: enterprise.splunk.com/v4
 kind: ObjectStorage
 metadata:
@@ -691,46 +509,19 @@ spec:
 ```
 
 ```
-$ kubectl apply -f os.yaml     
+$ kubectl apply -f os.yaml
 ```
 
 ```
-$ kubectl get os                        
+$ kubectl get os
 NAME   PHASE   AGE   MESSAGE
-os    Ready   20s  
-```
-
-```
-kubectl describe os                               
-Name:         os
-Namespace:    default
-Labels:       <none>
-Annotations:  <none>
-API Version:  enterprise.splunk.com/v4
-Kind:         ObjectStorage
-Metadata:
-  Creation Timestamp:  2025-10-27T10:25:53Z
-  Finalizers:
-    enterprise.splunk.com/delete-pvc
-  Generation:        1
-  Resource Version:  12345678
-  UID:               12345678-1234-5678-1234-012345678911
-Spec:
-  S3:
-    Endpoint:  https://s3.us-west-2.amazonaws.com
-    Path:      ingestion/smartbus-test
-  Provider:    s3
-Status:
-  Message:  
-  Phase:    Ready
-  Resource Rev Map:
-Events:  <none>
+os    Ready   20s
 ```
 
 5. Install IngestorCluster resource.
 
 ```
-$ cat ingestor.yaml          
+$ cat ingestor.yaml
 apiVersion: enterprise.splunk.com/v4
 kind: IngestorCluster
 metadata:
@@ -738,7 +529,7 @@ metadata:
   finalizers:
     - enterprise.splunk.com/delete-pvc
 spec:
-  serviceAccount: ingestor-sa 
+  serviceAccount: ingestor-sa
   replicas: 3
   image: splunk/splunk:${SPLUNK_IMAGE_VERSION}
   queueRef:
@@ -748,74 +539,32 @@ spec:
 ```
 
 ```
-$ kubectl apply -f ingestor.yaml     
+$ kubectl apply -f ingestor.yaml
 ```
 
 ```
-$ kubectl get po 
+$ kubectl get po
 NAME                         READY   STATUS    RESTARTS   AGE
 splunk-ingestor-ingestor-0   1/1     Running   0          2m12s
 splunk-ingestor-ingestor-1   1/1     Running   0          2m12s
 splunk-ingestor-ingestor-2   1/1     Running   0          2m12s
 ```
 
+Verify the configuration on the ingestor pods. The conf files are in the `100-sok-ingestorcluster` app directory:
+
 ```
-$ kubectl describe ingestorcluster ingestor
-Name:         ingestor
-Namespace:    default
-Labels:       <none>
-Annotations:  <none>
-API Version:  enterprise.splunk.com/v4
-Kind:         IngestorCluster
-Metadata:
-  Creation Timestamp:  2025-08-18T09:49:45Z
-  Generation:          1
-  Resource Version:    12345678
-  UID:                 12345678-1234-1234-1234-1234567890123
-Spec:
-  Queue Ref:
-    Name:           queue
-    Namespace:      default
-  Image:  splunk/splunk:${SPLUNK_IMAGE_VERSION}
-  Object Storage Ref:
-    Name:           os
-    Namespace:      default
-  Replicas:                          3
-  Service Account:                   ingestor-sa
-Status:
-  App Context:
-    App Repo:
-      App Install Period Seconds:  90
-      Defaults:
-        Premium Apps Props:
-          Es Defaults:
-      Install Max Retries:  2
-    Bundle Push Status:
-    Is Deployment In Progress:  false
-    Last App Info Check Time:   0
-    Version:                    0
-  Credential Secret Version:  33744270
-  Message:                      
-  Phase:                        Ready
-  Ready Replicas:               3
-  Replicas:                     3
-  Resource Rev Map:
-  Selector:           app.kubernetes.io/instance=splunk-ingestor-ingestor
-  Tel App Installed:  true
-Events:               <none>
+$ kubectl exec -it splunk-ingestor-ingestor-0 -- cat /opt/splunk/etc/apps/100-sok-ingestorcluster/local/outputs.conf
+[remote_queue:sqs-test]
+remote_queue.type = sqs_smartbus
+remote_queue.sqs_smartbus.auth_region = us-west-2
+remote_queue.sqs_smartbus.endpoint = https://sqs.us-west-2.amazonaws.com
+remote_queue.sqs_smartbus.large_message_store.endpoint = https://s3.us-west-2.amazonaws.com
+remote_queue.sqs_smartbus.large_message_store.path = s3://ingestion/smartbus-test
+remote_queue.sqs_smartbus.dead_letter_queue.name = sqs-dlq-test
 ```
 
 ```
-$ kubectl exec -it splunk-ingestor-ingestor-0 -- sh
-$ kubectl exec -it splunk-ingestor-ingestor-1 -- sh
-$ kubectl exec -it splunk-ingestor-ingestor-2 -- sh
-sh-4.4$ env | grep AWS
-AWS_DEFAULT_REGION=us-west-2
-AWS_WEB_IDENTITY_TOKEN_FILE=/var/run/secrets/eks.amazonaws.com/serviceaccount/token
-AWS_REGION=us-west-2
-AWS_ROLE_ARN=arn:aws:iam::111111111111:role/eksctl-ind-ing-sep-demo-addon-iamserviceac-Role1-123456789123
-AWS_STS_REGIONAL_ENDPOINTS=regional
-sh-4.4$ cat /opt/splunk/etc/system/local/default-mode.conf 
+$ kubectl exec -it splunk-ingestor-ingestor-0 -- cat /opt/splunk/etc/apps/100-sok-ingestorcluster/local/default-mode.conf
 [pipeline:remotequeueruleset]
 disabled = false
 
@@ -833,25 +582,36 @@ disabled = true
 
 [pipeline:indexerPipe]
 disabled = true
-    
-sh-4.4$ cat /opt/splunk/etc/system/local/outputs.conf 
+```
+
+6. Update Queue configuration without pod restart.
+
+After initial provisioning, you can update Queue fields and the operator will apply them in-place:
+
+```
+$ kubectl patch queue queue --type merge -p '{"spec":{"sqs":{"enableSharedReceipts":true,"encodingFormat":"s2s","sendInterval":"5s"}}}'
+```
+
+Verify the updated configuration appears on the pod (the operator will copy and reload within a few reconcile cycles):
+
+```
+$ kubectl exec -it splunk-ingestor-ingestor-0 -- cat /opt/splunk/etc/apps/100-sok-ingestorcluster/local/outputs.conf
 [remote_queue:sqs-test]
-remote_queue.sqs_smartbus.max_count.max_retries_per_part = 4
+remote_queue.type = sqs_smartbus
 remote_queue.sqs_smartbus.auth_region = us-west-2
-remote_queue.sqs_smartbus.dead_letter_queue.name = sqs-dlq-test
-remote_queue.sqs_smartbus.encoding_format = s2s
 remote_queue.sqs_smartbus.endpoint = https://sqs.us-west-2.amazonaws.com
 remote_queue.sqs_smartbus.large_message_store.endpoint = https://s3.us-west-2.amazonaws.com
 remote_queue.sqs_smartbus.large_message_store.path = s3://ingestion/smartbus-test
-remote_queue.sqs_smartbus.retry_policy = max_count
+remote_queue.sqs_smartbus.dead_letter_queue.name = sqs-dlq-test
+remote_queue.sqs_smartbus.encoding_format = s2s
 remote_queue.sqs_smartbus.send_interval = 5s
-remote_queue.type = sqs_smartbus
+remote_queue.sqs_smartbus.enable_shared_receipts = true
 ```
 
-6. Install IndexerCluster resource.
+7. Install IndexerCluster resource.
 
 ```
-$ cat idxc.yaml 
+$ cat idxc.yaml
 apiVersion: enterprise.splunk.com/v4
 kind: ClusterManager
 metadata:
@@ -860,7 +620,7 @@ metadata:
     - enterprise.splunk.com/delete-pvc
 spec:
   image: splunk/splunk:${SPLUNK_IMAGE_VERSION}
-  serviceAccount: ingestor-sa 
+  serviceAccount: ingestor-sa
 ---
 apiVersion: enterprise.splunk.com/v4
 kind: IndexerCluster
@@ -873,7 +633,7 @@ spec:
   replicas: 3
   clusterManagerRef:
     name: cm
-  serviceAccount: ingestor-sa 
+  serviceAccount: ingestor-sa
   queueRef:
     name: queue
   objectStorageRef:
@@ -881,7 +641,7 @@ spec:
 ```
 
 ```
-$ kubectl apply -f idxc.yaml 
+$ kubectl apply -f idxc.yaml
 ```
 
 ```
@@ -896,63 +656,10 @@ splunk-ingestor-ingestor-1    1/1     Running   0          29m
 splunk-ingestor-ingestor-2    1/1     Running   0          31m
 ```
 
-```
-$ kubectl exec -it splunk-indexer-indexer-0  -- sh 
-$ kubectl exec -it splunk-indexer-indexer-1  -- sh 
-$ kubectl exec -it splunk-indexer-indexer-2  -- sh 
-sh-4.4$ env | grep AWS
-AWS_DEFAULT_REGION=us-west-2
-AWS_WEB_IDENTITY_TOKEN_FILE=/var/run/secrets/eks.amazonaws.com/serviceaccount/token
-AWS_REGION=us-west-2
-AWS_ROLE_ARN=arn:aws:iam::111111111111:role/eksctl-ind-ing-sep-demo-addon-iamserviceac-Role1-123456789123
-AWS_STS_REGIONAL_ENDPOINTS=regional
-sh-4.4$ cat /opt/splunk/etc/system/local/inputs.conf 
-
-[splunktcp://9997]
-disabled = 0
-
-[remote_queue:sqs-test]
-remote_queue.sqs_smartbus.max_count.max_retries_per_part = 4
-remote_queue.sqs_smartbus.auth_region = us-west-2
-remote_queue.sqs_smartbus.dead_letter_queue.name = sqs-dlq-test
-remote_queue.sqs_smartbus.endpoint = https://sqs.us-west-2.amazonaws.com
-remote_queue.sqs_smartbus.large_message_store.endpoint = https://s3.us-west-2.amazonaws.com
-remote_queue.sqs_smartbus.large_message_store.path = s3://ingestion/smartbus-test
-remote_queue.sqs_smartbus.retry_policy = max_count
-remote_queue.type = sqs_smartbus
-sh-4.4$ cat /opt/splunk/etc/system/local/outputs.conf 
-[remote_queue:sqs-test]
-remote_queue.sqs_smartbus.max_count.max_retries_per_part = 4
-remote_queue.sqs_smartbus.auth_region = us-west-2
-remote_queue.sqs_smartbus.dead_letter_queue.name = sqs-dlq-test
-remote_queue.sqs_smartbus.encoding_format = s2s
-remote_queue.sqs_smartbus.endpoint = https://sqs.us-west-2.amazonaws.com
-remote_queue.sqs_smartbus.large_message_store.endpoint = https://s3.us-west-2.amazonaws.com
-remote_queue.sqs_smartbus.large_message_store.path = s3://ingestion/smartbus-test
-remote_queue.sqs_smartbus.retry_policy = max_count
-remote_queue.sqs_smartbus.send_interval = 5s
-remote_queue.type = sqs_smartbus
-sh-4.4$ cat /opt/splunk/etc/system/local/default-mode.conf 
-[pipeline:remotequeueruleset]
-disabled = false
-
-[pipeline:ruleset]
-disabled = true
-
-[pipeline:remotequeuetyping]
-disabled = false
-
-[pipeline:remotequeueoutput]
-disabled = false
-
-[pipeline:typing]
-disabled = true
-```
-
-7. Install Horizontal Pod Autoscaler for IngestorCluster.
+8. Install Horizontal Pod Autoscaler for IngestorCluster.
 
 ```
-$ cat hpa-ing.yaml 
+$ cat hpa-ing.yaml
 apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
 metadata:
@@ -978,223 +685,12 @@ $ kubectl apply -f hpa-ing.yaml
 ```
 
 ```
-$ kubectl get hpa              
+$ kubectl get hpa
 NAME      REFERENCE                  TARGETS              MINPODS   MAXPODS   REPLICAS   AGE
 ing-hpa   IngestorCluster/ingestor   cpu: <unknown>/50%   3         10        0          10s
 ```
 
-```
-kubectl top pod
-NAME                             CPU(cores)   MEMORY(bytes)   
-hec-locust-load-29270124-f86gj   790m         221Mi           
-splunk-cm-cluster-manager-0      154m         1696Mi          
-splunk-indexer-indexer-0         107m         1339Mi          
-splunk-indexer-indexer-1         187m         1052Mi          
-splunk-indexer-indexer-2         203m         1703Mi          
-splunk-ingestor-ingestor-0       97m          517Mi           
-splunk-ingestor-ingestor-1       64m          585Mi           
-splunk-ingestor-ingestor-2       57m          565Mi  
-```
+## Documentation References
 
-```
-$ kubectl get po   
-NAME                             READY   STATUS    RESTARTS   AGE
-hec-locust-load-29270126-szgv2   1/1     Running   0          30s
-splunk-cm-cluster-manager-0      1/1     Running   0          41m
-splunk-indexer-indexer-0         1/1     Running   0          38m
-splunk-indexer-indexer-1         1/1     Running   0          38m
-splunk-indexer-indexer-2         1/1     Running   0          38m
-splunk-ingestor-ingestor-0       1/1     Running   0          53m
-splunk-ingestor-ingestor-1       1/1     Running   0          55m
-splunk-ingestor-ingestor-2       1/1     Running   0          57m
-splunk-ingestor-ingestor-3       0/1     Running   0          116s
-splunk-ingestor-ingestor-4       0/1     Running   0          116s
-```
-
-```
-kubectl top pod
-NAME                             CPU(cores)   MEMORY(bytes)   
-hec-locust-load-29270126-szgv2   532m         72Mi            
-splunk-cm-cluster-manager-0      91m          1260Mi          
-splunk-indexer-indexer-0         112m         865Mi           
-splunk-indexer-indexer-1         115m         855Mi           
-splunk-indexer-indexer-2         152m         1696Mi          
-splunk-ingestor-ingestor-0       115m         482Mi           
-splunk-ingestor-ingestor-1       76m          496Mi           
-splunk-ingestor-ingestor-2       156m         553Mi           
-splunk-ingestor-ingestor-3       355m         846Mi           
-splunk-ingestor-ingestor-4       1036m        979Mi   
-```
-
-```
-kubectl get hpa
-NAME      REFERENCE                  TARGETS         MINPODS   MAXPODS   REPLICAS   AGE
-ing-hpa   IngestorCluster/ingestor   cpu: 115%/50%   3         10        10         8m54s
-```
-
-8. Generate fake load.
-
-- HEC_TOKEN: HEC token for making fake calls
-
-```
-$ kubectl get secret splunk-default-secret -o yaml
-apiVersion: v1
-data:
-  hec_token: HEC_TOKEN
-  idxc_secret: YWJjZGVmMTIzNDU2Cg==
-  pass4SymmKey: YWJjZGVmMTIzNDU2Cg==
-  password: YWJjZGVmMTIzNDU2Cg==
-  shc_secret: YWJjZGVmMTIzNDU2Cg==
-kind: Secret
-metadata:
-  creationTimestamp: "2025-08-26T10:15:11Z"
-  name: splunk-default-secret
-  namespace: default
-  ownerReferences:
-  - apiVersion: enterprise.splunk.com/v4
-    controller: false
-    kind: IngestorCluster
-    name: ingestor
-    uid: 12345678-1234-1234-1234-1234567890123
-  - apiVersion: enterprise.splunk.com/v4
-    controller: false
-    kind: ClusterManager
-    name: cm
-    uid: 12345678-1234-1234-1234-1234567890125
-  - apiVersion: enterprise.splunk.com/v4
-    controller: false
-    kind: IndexerCluster
-    name: indexer
-    uid: 12345678-1234-1234-1234-1234567890124
-  resourceVersion: "123456"
-  uid: 12345678-1234-1234-1234-1234567890126
-type: Opaque 
-```
-
-```
-$ echo HEC_TOKEN | base64 -d         
-HEC_TOKEN
-```
-
-```
-cat loadgen.yaml 
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: hec-locust-config
-data:
-  requirements.txt: |
-    locust
-    requests
-    urllib3
-
-  locustfile.py: |
-    import urllib3
-    from locust import HttpUser, task, between
-
-    # disable insecure‐ssl warnings
-    urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-
-    class HECUser(HttpUser):
-        wait_time = between(1, 2)
-        # use HTTPS and explicit port
-        host = "https://splunk-ingestor-ingestor-service:8088"
-
-        def on_start(self):
-            # turn off SSL cert verification
-            self.client.verify = False
-
-        @task
-        def send_event(self):
-            token = "HEC_TOKEN"
-            headers = {
-                "Authorization": f"Splunk {token}",
-                "Content-Type": "application/json"
-            }
-            payload = {"event": {"message": "load test", "value": 123}}
-            # this will POST to https://…:8088/services/collector/event
-            self.client.post(
-                "/services/collector/event",
-                json=payload,
-                headers=headers,
-                name="HEC POST"
-            )
----
-apiVersion: batch/v1
-kind: CronJob
-metadata:
-  name: hec-locust-load
-spec:
-  schedule: "*/2 * * * *"
-  concurrencyPolicy: Replace
-  startingDeadlineSeconds: 60
-  jobTemplate:
-    spec:
-      backoffLimit: 1
-      template:
-        spec:
-          containers:
-          - name: locust
-            image: python:3.9-slim
-            command:
-              - sh
-              - -c
-              - |
-                pip install --no-cache-dir -r /app/requirements.txt \
-                  && exec locust \
-                     -f /app/locustfile.py \
-                     --headless \
-                     -u 200 \
-                     -r 50 \
-                     --run-time 1m50s
-            volumeMounts:
-            - name: app
-              mountPath: /app
-          restartPolicy: OnFailure
-          volumes:
-          - name: app
-            configMap:
-              name: hec-locust-config
-              defaultMode: 0755
-```
-
-```
-kubectl apply -f loadgen.yaml
-```
-
-```
-$ kubectl get cm                                  
-NAME                                  DATA   AGE
-hec-locust-config                     2      10s
-kube-root-ca.crt                      1      5d2h
-splunk-cluster-manager-cm-configmap   1      28m
-splunk-default-probe-configmap        3      58m
-splunk-indexer-indexer-configmap      1      28m
-splunk-ingestor-ingestor-configmap    1      48m
-```
-
-```
-$ kubectl get cj
-NAME              SCHEDULE      TIMEZONE   SUSPEND   ACTIVE   LAST SCHEDULE   AGE
-hec-locust-load   */2 * * * *   <none>     False     1        2s              26s
-```
-
-```
-$ kubectl get po
-NAME                             READY   STATUS    RESTARTS   AGE
-hec-locust-load-29270114-zq7zz   1/1     Running   0          15s
-splunk-cm-cluster-manager-0      1/1     Running   0          29m
-splunk-indexer-indexer-0         1/1     Running   0          26m
-splunk-indexer-indexer-1         1/1     Running   0          26m
-splunk-indexer-indexer-2         1/1     Running   0          26m
-splunk-ingestor-ingestor-0       1/1     Running   0          41m
-splunk-ingestor-ingestor-1       1/1     Running   0          43m
-splunk-ingestor-ingestor-2       1/1     Running   0          45m
-```
-
-```
-$ aws s3 ls s3://ingestion/smartbus-test/
-                           PRE 29DDC1B4-D43E-47D1-AC04-C87AC7298201/
-                           PRE 43E16731-7146-4397-8553-D68B5C2C8634/
-                           PRE C8A4D060-DE0D-4DCB-9690-01D8902825DC/
-```
+- [Horizontal Pod Autoscaling on Kubernetes Docs](https://kubernetes.io/docs/tasks/run-application/horizontal-pod-autoscale/)
+- [kube-prometheus-stack](https://github.com/prometheus-community/helm-charts/tree/main/charts/kube-prometheus-stack)
