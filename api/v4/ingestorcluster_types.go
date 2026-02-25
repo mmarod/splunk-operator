@@ -73,6 +73,10 @@ type IngestorClusterStatus struct {
 
 	// Auxillary message describing CR status
 	Message string `json:"message"`
+
+	// QueueConfigExpectedChecksum holds the expected conf checksum when a ConfigMap
+	// update is pending propagation to the volume mount. Empty means no reload pending.
+	QueueConfigExpectedChecksum string `json:"queueConfigExpectedChecksum,omitempty"`
 }
 
 // +kubebuilder:object:root=true

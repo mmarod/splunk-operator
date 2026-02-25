@@ -4621,6 +4621,11 @@ spec:
                 - Terminating
                 - Error
                 type: string
+              queueConfigExpectedChecksum:
+                description: |-
+                  QueueConfigExpectedChecksum holds the expected conf checksum when a ConfigMap
+                  update is pending propagation to the volume mount. Empty means no reload pending.
+                type: string
               readyReplicas:
                 description: Number of ready ingestor pods
                 format: int32

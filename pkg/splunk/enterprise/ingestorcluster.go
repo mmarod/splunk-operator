@@ -237,13 +237,36 @@ func ApplyIngestorCluster(ctx context.Context, client client.Client, cr *enterpr
 			}
 		}
 
-		// If ConfigMap content changed, reload the ingestor app on all pods
+		// When the ConfigMap changes, the kubelet needs time to propagate the
+		// update to the volume mount on each pod. Store the expected checksum
+		// and requeue. On subsequent reconciles, verify the mount content
+		// matches before copying files and reloading.
 		if configMapChanged {
+			outputsConf := generateIngestorOutputsConf(&qosCfg.Queue, &qosCfg.OS, qosCfg.AccessKey, qosCfg.SecretKey)
+			defaultModeConf := generateIngestorDefaultModeConf()
+			cr.Status.QueueConfigExpectedChecksum = computeIngestorConfChecksum(outputsConf, defaultModeConf)
+			scopedLog.Info("ConfigMap changed, waiting for volume mount propagation")
+			result.RequeueAfter = 5 * time.Second
+			return result, nil
+		}
+		if cr.Status.QueueConfigExpectedChecksum != "" {
+			mountReady, err := isIngestorQueueMountCurrent(ctx, client, cr, cr.Status.QueueConfigExpectedChecksum)
+			if err != nil {
+				scopedLog.Error(err, "Failed to check queue config mount status")
+				result.RequeueAfter = 5 * time.Second
+				return result, nil
+			}
+			if !mountReady {
+				scopedLog.Info("Volume mount not yet propagated, requeuing")
+				result.RequeueAfter = 5 * time.Second
+				return result, nil
+			}
 			err = reloadIngestorApp(ctx, client, cr)
 			if err != nil {
 				eventPublisher.Warning(ctx, "reloadIngestorApp", fmt.Sprintf("reload ingestor app failed %s", err.Error()))
 				return result, err
 			}
+			cr.Status.QueueConfigExpectedChecksum = ""
 		}
 
 		finalResult := handleAppFrameworkActivity(ctx, client, cr, &cr.Status.AppContext, &cr.Spec.AppFrameworkConfig)
@@ -569,6 +592,21 @@ func buildAndApplyIngestorQueueConfigMap(ctx context.Context, client splcommon.C
 	return splctrl.ApplyConfigMap(ctx, client, configMap)
 }
 
+// isIngestorQueueMountCurrent checks whether the kubelet has propagated the
+// updated ConfigMap to the volume mount on at least one pod. It reads the
+// mounted local.meta and checks whether the expected checksum is present.
+func isIngestorQueueMountCurrent(ctx context.Context, client splcommon.ControllerClient, cr *enterpriseApi.IngestorCluster, expectedChecksum string) (bool, error) {
+	podName := GetSplunkStatefulsetPodName(SplunkIngestor, cr.GetName(), 0)
+	podExecClient := splutil.GetPodExecClient(client, cr, podName)
+	command := fmt.Sprintf("cat %s/local.meta", ingestorQueueConfigMountPath)
+	streamOptions := splutil.NewStreamOptionsObject(command)
+	stdout, _, err := podExecClient.RunPodExecCommand(ctx, streamOptions, []string{"/bin/sh"})
+	if err != nil {
+		return false, err
+	}
+	return strings.Contains(stdout, expectedChecksum), nil
+}
+
 // reloadIngestorApp triggers a Splunk app reload on every ingestor pod so that
 // updated conf files (via ConfigMap) are picked up without a full pod restart.
 // Two separate exec calls are used (matching the addTelApp pattern) because
@@ -581,10 +619,12 @@ var reloadIngestorApp = func(ctx context.Context, client splcommon.ControllerCli
 
 	podExecClient := splutil.GetPodExecClient(client, cr, "")
 
-	// Step 1: Copy fresh local.meta from ConfigMap mount
-	err := runCustomCommandOnSplunkPods(ctx, cr, cr.Spec.Replicas, ingestorQueueConfigCopyMetaString, podExecClient)
+	// Step 1: Copy all conf files from ConfigMap mount into the app directory.
+	// Files are always copied (not symlinked) because Splunk replaces symlinks
+	// with regular files when it modifies content (e.g. encrypting credentials).
+	err := runCustomCommandOnSplunkPods(ctx, cr, cr.Spec.Replicas, ingestorQueueConfigCopyConfString, podExecClient)
 	if err != nil {
-		scopedLog.Error(err, "Failed to copy local.meta on ingestor pods")
+		scopedLog.Error(err, "Failed to copy conf files on ingestor pods")
 		return err
 	}
 
