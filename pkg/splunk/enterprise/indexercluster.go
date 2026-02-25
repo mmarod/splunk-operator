@@ -1440,21 +1440,13 @@ func getQueueAndObjectStorageInputsForIndexerConfFiles(queue *enterpriseApi.Queu
 		[]string{fmt.Sprintf("remote_queue.%s.dead_letter_queue.name", queueProvider), dlq},
 	)
 
-	// max_retries_per_part: CRD value or default "4"
-	maxRetries := "4"
-	if queue.SQS.MaxRetriesPerPart != nil {
-		maxRetries = fmt.Sprintf("%d", *queue.SQS.MaxRetriesPerPart)
-	}
-	inputs = append(inputs, []string{fmt.Sprintf("remote_queue.%s.max_count.max_retries_per_part", queueProvider), maxRetries})
-
-	// retry_policy: CRD value or default "max_count"
-	retryPolicy := "max_count"
-	if queue.SQS.RetryPolicy != "" {
-		retryPolicy = queue.SQS.RetryPolicy
-	}
-	inputs = append(inputs, []string{fmt.Sprintf("remote_queue.%s.retry_policy", queueProvider), retryPolicy})
-
 	// Optional SQS fields — only emitted when set
+	if queue.SQS.MaxRetriesPerPart != nil {
+		inputs = append(inputs, []string{fmt.Sprintf("remote_queue.%s.max_count.max_retries_per_part", queueProvider), fmt.Sprintf("%d", *queue.SQS.MaxRetriesPerPart)})
+	}
+	if queue.SQS.RetryPolicy != "" {
+		inputs = append(inputs, []string{fmt.Sprintf("remote_queue.%s.retry_policy", queueProvider), queue.SQS.RetryPolicy})
+	}
 	if queue.SQS.MaxConnections != nil {
 		inputs = append(inputs, []string{fmt.Sprintf("remote_queue.%s.max_connections", queueProvider), fmt.Sprintf("%d", *queue.SQS.MaxConnections)})
 	}
@@ -1490,6 +1482,9 @@ func getQueueAndObjectStorageInputsForIndexerConfFiles(queue *enterpriseApi.Queu
 	}
 	if queue.SQS.DLQProcessInterval != "" {
 		inputs = append(inputs, []string{fmt.Sprintf("remote_queue.%s.dead_letter_queue.process_interval", queueProvider), queue.SQS.DLQProcessInterval})
+	}
+	if queue.SQS.EnableSharedReceipts != nil {
+		inputs = append(inputs, []string{fmt.Sprintf("remote_queue.%s.enable_shared_receipts", queueProvider), fmt.Sprintf("%t", *queue.SQS.EnableSharedReceipts)})
 	}
 
 	// Optional S3/large_message_store fields — only emitted when set
@@ -1540,19 +1535,12 @@ func getQueueAndObjectStorageInputsForIndexerConfFiles(queue *enterpriseApi.Queu
 	outputs = make([][]string, len(inputs))
 	copy(outputs, inputs)
 
-	// send_interval: CRD value or default "5s"
-	sendInterval := "5s"
 	if queue.SQS.SendInterval != "" {
-		sendInterval = queue.SQS.SendInterval
+		outputs = append(outputs, []string{fmt.Sprintf("remote_queue.%s.send_interval", queueProvider), queue.SQS.SendInterval})
 	}
-	outputs = append(outputs, []string{fmt.Sprintf("remote_queue.%s.send_interval", queueProvider), sendInterval})
-
-	// encoding_format: CRD value or default "s2s"
-	encodingFormat := "s2s"
 	if queue.SQS.EncodingFormat != "" {
-		encodingFormat = queue.SQS.EncodingFormat
+		outputs = append(outputs, []string{fmt.Sprintf("remote_queue.%s.encoding_format", queueProvider), queue.SQS.EncodingFormat})
 	}
-	outputs = append(outputs, []string{fmt.Sprintf("remote_queue.%s.encoding_format", queueProvider), encodingFormat})
 
 	return inputs, outputs
 }

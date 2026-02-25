@@ -127,6 +127,10 @@ type SQSSpec struct {
 	// +optional
 	// Dead letter queue process interval (e.g. "1d")
 	DLQProcessInterval string `json:"dlqProcessInterval,omitempty"`
+
+	// +optional
+	// Whether to enable shared receipts
+	EnableSharedReceipts *bool `json:"enableSharedReceipts,omitempty"`
 }
 
 // QueueStatus defines the observed state of Queue

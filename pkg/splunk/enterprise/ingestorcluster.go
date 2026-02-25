@@ -335,8 +335,7 @@ func getPipelineInputsForConfFile(isIndexer bool) (config [][]string) {
 }
 
 // getQueueAndObjectStorageInputsForIngestorConfFiles returns a list of queue and object storage inputs for conf files.
-// Previously hardcoded values (encoding_format, retry_policy, max_retries_per_part, send_interval) use the CRD value
-// if set, otherwise fall back to the previous hardcoded defaults for backward compatibility.
+// All optional fields are only emitted when explicitly set on the CRD.
 func getQueueAndObjectStorageInputsForIngestorConfFiles(queue *enterpriseApi.QueueSpec, os *enterpriseApi.ObjectStorageSpec, accessKey, secretKey string) (config [][]string) {
 	queueProvider := ""
 	authRegion := ""
@@ -379,35 +378,19 @@ func getQueueAndObjectStorageInputsForIngestorConfFiles(queue *enterpriseApi.Que
 		[]string{fmt.Sprintf("remote_queue.%s.dead_letter_queue.name", queueProvider), dlq},
 	)
 
-	// encoding_format: CRD value or default "s2s"
-	encodingFormat := "s2s"
-	if queue.SQS.EncodingFormat != "" {
-		encodingFormat = queue.SQS.EncodingFormat
-	}
-	config = append(config, []string{fmt.Sprintf("remote_queue.%s.encoding_format", queueProvider), encodingFormat})
-
-	// max_retries_per_part: CRD value or default "4"
-	maxRetries := "4"
-	if queue.SQS.MaxRetriesPerPart != nil {
-		maxRetries = fmt.Sprintf("%d", *queue.SQS.MaxRetriesPerPart)
-	}
-	config = append(config, []string{fmt.Sprintf("remote_queue.%s.max_count.max_retries_per_part", queueProvider), maxRetries})
-
-	// retry_policy: CRD value or default "max_count"
-	retryPolicy := "max_count"
-	if queue.SQS.RetryPolicy != "" {
-		retryPolicy = queue.SQS.RetryPolicy
-	}
-	config = append(config, []string{fmt.Sprintf("remote_queue.%s.retry_policy", queueProvider), retryPolicy})
-
-	// send_interval: CRD value or default "5s"
-	sendInterval := "5s"
-	if queue.SQS.SendInterval != "" {
-		sendInterval = queue.SQS.SendInterval
-	}
-	config = append(config, []string{fmt.Sprintf("remote_queue.%s.send_interval", queueProvider), sendInterval})
-
 	// Optional SQS fields — only emitted when set
+	if queue.SQS.EncodingFormat != "" {
+		config = append(config, []string{fmt.Sprintf("remote_queue.%s.encoding_format", queueProvider), queue.SQS.EncodingFormat})
+	}
+	if queue.SQS.MaxRetriesPerPart != nil {
+		config = append(config, []string{fmt.Sprintf("remote_queue.%s.max_count.max_retries_per_part", queueProvider), fmt.Sprintf("%d", *queue.SQS.MaxRetriesPerPart)})
+	}
+	if queue.SQS.RetryPolicy != "" {
+		config = append(config, []string{fmt.Sprintf("remote_queue.%s.retry_policy", queueProvider), queue.SQS.RetryPolicy})
+	}
+	if queue.SQS.SendInterval != "" {
+		config = append(config, []string{fmt.Sprintf("remote_queue.%s.send_interval", queueProvider), queue.SQS.SendInterval})
+	}
 	if queue.SQS.MaxConnections != nil {
 		config = append(config, []string{fmt.Sprintf("remote_queue.%s.max_connections", queueProvider), fmt.Sprintf("%d", *queue.SQS.MaxConnections)})
 	}
@@ -443,6 +426,9 @@ func getQueueAndObjectStorageInputsForIngestorConfFiles(queue *enterpriseApi.Que
 	}
 	if queue.SQS.DLQProcessInterval != "" {
 		config = append(config, []string{fmt.Sprintf("remote_queue.%s.dead_letter_queue.process_interval", queueProvider), queue.SQS.DLQProcessInterval})
+	}
+	if queue.SQS.EnableSharedReceipts != nil {
+		config = append(config, []string{fmt.Sprintf("remote_queue.%s.enable_shared_receipts", queueProvider), fmt.Sprintf("%t", *queue.SQS.EnableSharedReceipts)})
 	}
 
 	// Optional S3/large_message_store fields — only emitted when set

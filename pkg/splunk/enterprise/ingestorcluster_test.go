@@ -369,7 +369,7 @@ func TestGenerateIngestorOutputsConf(t *testing.T) {
 		},
 	}
 
-	// With credentials — backward compat: defaults match previous hardcoded values
+	// With credentials
 	conf := generateIngestorOutputsConf(queue, objStorage, "mykey", "mysecret")
 	assert.Contains(t, conf, "[remote_queue:test-queue]")
 	assert.Contains(t, conf, fmt.Sprintf("remote_queue.type = %s", provider))
@@ -378,10 +378,6 @@ func TestGenerateIngestorOutputsConf(t *testing.T) {
 	assert.Contains(t, conf, fmt.Sprintf("remote_queue.%s.large_message_store.endpoint = https://s3.us-west-2.amazonaws.com", provider))
 	assert.Contains(t, conf, fmt.Sprintf("remote_queue.%s.large_message_store.path = s3://bucket/key", provider))
 	assert.Contains(t, conf, fmt.Sprintf("remote_queue.%s.dead_letter_queue.name = sqs-dlq-test", provider))
-	assert.Contains(t, conf, fmt.Sprintf("remote_queue.%s.encoding_format = s2s", provider))
-	assert.Contains(t, conf, fmt.Sprintf("remote_queue.%s.max_count.max_retries_per_part = 4", provider))
-	assert.Contains(t, conf, fmt.Sprintf("remote_queue.%s.retry_policy = max_count", provider))
-	assert.Contains(t, conf, fmt.Sprintf("remote_queue.%s.send_interval = 5s", provider))
 	assert.Contains(t, conf, fmt.Sprintf("remote_queue.%s.access_key = mykey", provider))
 	assert.Contains(t, conf, fmt.Sprintf("remote_queue.%s.secret_key = mysecret", provider))
 
@@ -390,7 +386,11 @@ func TestGenerateIngestorOutputsConf(t *testing.T) {
 	assert.NotContains(t, conf, "access_key")
 	assert.NotContains(t, conf, "secret_key")
 
-	// Optional fields should not appear when not set
+	// Optional fields should not appear when not set on the CR
+	assert.NotContains(t, conf, "encoding_format")
+	assert.NotContains(t, conf, "max_retries_per_part")
+	assert.NotContains(t, conf, "retry_policy")
+	assert.NotContains(t, conf, "send_interval")
 	assert.NotContains(t, conf, "max_connections")
 	assert.NotContains(t, conf, "message_group_id")
 	assert.NotContains(t, conf, "timeout.connect")
@@ -439,6 +439,7 @@ func TestGenerateIngestorOutputsConfAllFields(t *testing.T) {
 	execWorkers := int32(4)
 	minPending := int32(100)
 	renewRetries := int32(3)
+	enableSharedReceipts := true
 	sslVerify := true
 
 	queue := &enterpriseApi.QueueSpec{
@@ -464,6 +465,7 @@ func TestGenerateIngestorOutputsConfAllFields(t *testing.T) {
 			EncodingFormat:          "json",
 			SendInterval:            "10s",
 			DLQProcessInterval:      "2d",
+			EnableSharedReceipts:    &enableSharedReceipts,
 		},
 	}
 
@@ -506,6 +508,7 @@ func TestGenerateIngestorOutputsConfAllFields(t *testing.T) {
 	assert.Contains(t, conf, fmt.Sprintf("remote_queue.%s.min_pending_messages = 100", provider))
 	assert.Contains(t, conf, fmt.Sprintf("remote_queue.%s.renew_retries = 3", provider))
 	assert.Contains(t, conf, fmt.Sprintf("remote_queue.%s.dead_letter_queue.process_interval = 2d", provider))
+	assert.Contains(t, conf, fmt.Sprintf("remote_queue.%s.enable_shared_receipts = true", provider))
 
 	// Verify all S3/large_message_store fields
 	assert.Contains(t, conf, fmt.Sprintf("remote_queue.%s.large_message_store.sslVerifyServerCert = true", provider))
@@ -691,7 +694,8 @@ func TestGetQueueAndObjectStorageInputsForIngestorConfFiles(t *testing.T) {
 
 	config := getQueueAndObjectStorageInputsForIngestorConfFiles(queue, objStorage, "key", "secret")
 
-	assert.Equal(t, 12, len(config))
+	// With no optional fields set: 6 always-emitted + 2 credentials = 8
+	assert.Equal(t, 8, len(config))
 	assert.Equal(t, [][]string{
 		{"remote_queue.type", provider},
 		{fmt.Sprintf("remote_queue.%s.auth_region", provider), queue.SQS.AuthRegion},
@@ -699,10 +703,6 @@ func TestGetQueueAndObjectStorageInputsForIngestorConfFiles(t *testing.T) {
 		{fmt.Sprintf("remote_queue.%s.large_message_store.endpoint", provider), objStorage.S3.Endpoint},
 		{fmt.Sprintf("remote_queue.%s.large_message_store.path", provider), "s3://" + objStorage.S3.Path},
 		{fmt.Sprintf("remote_queue.%s.dead_letter_queue.name", provider), queue.SQS.DLQ},
-		{fmt.Sprintf("remote_queue.%s.encoding_format", provider), "s2s"},
-		{fmt.Sprintf("remote_queue.%s.max_count.max_retries_per_part", provider), "4"},
-		{fmt.Sprintf("remote_queue.%s.retry_policy", provider), "max_count"},
-		{fmt.Sprintf("remote_queue.%s.send_interval", provider), "5s"},
 		{fmt.Sprintf("remote_queue.%s.access_key", provider), "key"},
 		{fmt.Sprintf("remote_queue.%s.secret_key", provider), "secret"},
 	}, config)

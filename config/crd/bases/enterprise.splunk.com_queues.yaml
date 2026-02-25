@@ -78,6 +78,9 @@ spec:
                   dlqProcessInterval:
                     description: Dead letter queue process interval (e.g. "1d")
                     type: string
+                  enableSharedReceipts:
+                    description: Whether to enable shared receipts
+                    type: boolean
                   encodingFormat:
                     description: Encoding format for messages (e.g. "s2s")
                     type: string

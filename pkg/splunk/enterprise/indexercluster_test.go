@@ -2146,7 +2146,8 @@ func TestGetQueueAndPipelineInputsForIndexerConfFiles(t *testing.T) {
 	secret := "secret"
 
 	queueChangedFieldsInputs, queueChangedFieldsOutputs, pipelineChangedFields := getQueueAndPipelineInputsForIndexerConfFiles(&queue.Spec, &os.Spec, key, secret)
-	assert.Equal(t, 10, len(queueChangedFieldsInputs))
+	// With no optional fields set, inputs has 8 entries (6 always-emitted + 2 credentials)
+	assert.Equal(t, 8, len(queueChangedFieldsInputs))
 	assert.Equal(t, [][]string{
 		{"remote_queue.type", provider},
 		{fmt.Sprintf("remote_queue.%s.auth_region", provider), queue.Spec.SQS.AuthRegion},
@@ -2154,13 +2155,12 @@ func TestGetQueueAndPipelineInputsForIndexerConfFiles(t *testing.T) {
 		{fmt.Sprintf("remote_queue.%s.large_message_store.endpoint", provider), os.Spec.S3.Endpoint},
 		{fmt.Sprintf("remote_queue.%s.large_message_store.path", provider), "s3://" + os.Spec.S3.Path},
 		{fmt.Sprintf("remote_queue.%s.dead_letter_queue.name", provider), queue.Spec.SQS.DLQ},
-		{fmt.Sprintf("remote_queue.%s.max_count.max_retries_per_part", provider), "4"},
-		{fmt.Sprintf("remote_queue.%s.retry_policy", provider), "max_count"},
 		{fmt.Sprintf("remote_queue.%s.access_key", provider), key},
 		{fmt.Sprintf("remote_queue.%s.secret_key", provider), secret},
 	}, queueChangedFieldsInputs)
 
-	assert.Equal(t, 12, len(queueChangedFieldsOutputs))
+	// outputs = same as inputs (no optional outputs-only fields set)
+	assert.Equal(t, 8, len(queueChangedFieldsOutputs))
 	assert.Equal(t, [][]string{
 		{"remote_queue.type", provider},
 		{fmt.Sprintf("remote_queue.%s.auth_region", provider), queue.Spec.SQS.AuthRegion},
@@ -2168,12 +2168,8 @@ func TestGetQueueAndPipelineInputsForIndexerConfFiles(t *testing.T) {
 		{fmt.Sprintf("remote_queue.%s.large_message_store.endpoint", provider), os.Spec.S3.Endpoint},
 		{fmt.Sprintf("remote_queue.%s.large_message_store.path", provider), "s3://" + os.Spec.S3.Path},
 		{fmt.Sprintf("remote_queue.%s.dead_letter_queue.name", provider), queue.Spec.SQS.DLQ},
-		{fmt.Sprintf("remote_queue.%s.max_count.max_retries_per_part", provider), "4"},
-		{fmt.Sprintf("remote_queue.%s.retry_policy", provider), "max_count"},
 		{fmt.Sprintf("remote_queue.%s.access_key", provider), key},
 		{fmt.Sprintf("remote_queue.%s.secret_key", provider), secret},
-		{fmt.Sprintf("remote_queue.%s.send_interval", provider), "5s"},
-		{fmt.Sprintf("remote_queue.%s.encoding_format", provider), "s2s"},
 	}, queueChangedFieldsOutputs)
 
 	assert.Equal(t, 5, len(pipelineChangedFields))
@@ -2232,7 +2228,7 @@ func TestGetQueueAndPipelineInputsForIndexerConfFilesSQSCP(t *testing.T) {
 	secret := "secret"
 
 	queueChangedFieldsInputs, queueChangedFieldsOutputs, pipelineChangedFields := getQueueAndPipelineInputsForIndexerConfFiles(&queue.Spec, &os.Spec, key, secret)
-	assert.Equal(t, 10, len(queueChangedFieldsInputs))
+	assert.Equal(t, 8, len(queueChangedFieldsInputs))
 	assert.Equal(t, [][]string{
 		{"remote_queue.type", provider},
 		{fmt.Sprintf("remote_queue.%s.auth_region", provider), queue.Spec.SQS.AuthRegion},
@@ -2240,13 +2236,11 @@ func TestGetQueueAndPipelineInputsForIndexerConfFilesSQSCP(t *testing.T) {
 		{fmt.Sprintf("remote_queue.%s.large_message_store.endpoint", provider), os.Spec.S3.Endpoint},
 		{fmt.Sprintf("remote_queue.%s.large_message_store.path", provider), "s3://" + os.Spec.S3.Path},
 		{fmt.Sprintf("remote_queue.%s.dead_letter_queue.name", provider), queue.Spec.SQS.DLQ},
-		{fmt.Sprintf("remote_queue.%s.max_count.max_retries_per_part", provider), "4"},
-		{fmt.Sprintf("remote_queue.%s.retry_policy", provider), "max_count"},
 		{fmt.Sprintf("remote_queue.%s.access_key", provider), key},
 		{fmt.Sprintf("remote_queue.%s.secret_key", provider), secret},
 	}, queueChangedFieldsInputs)
 
-	assert.Equal(t, 12, len(queueChangedFieldsOutputs))
+	assert.Equal(t, 8, len(queueChangedFieldsOutputs))
 	assert.Equal(t, [][]string{
 		{"remote_queue.type", provider},
 		{fmt.Sprintf("remote_queue.%s.auth_region", provider), queue.Spec.SQS.AuthRegion},
@@ -2254,12 +2248,8 @@ func TestGetQueueAndPipelineInputsForIndexerConfFilesSQSCP(t *testing.T) {
 		{fmt.Sprintf("remote_queue.%s.large_message_store.endpoint", provider), os.Spec.S3.Endpoint},
 		{fmt.Sprintf("remote_queue.%s.large_message_store.path", provider), "s3://" + os.Spec.S3.Path},
 		{fmt.Sprintf("remote_queue.%s.dead_letter_queue.name", provider), queue.Spec.SQS.DLQ},
-		{fmt.Sprintf("remote_queue.%s.max_count.max_retries_per_part", provider), "4"},
-		{fmt.Sprintf("remote_queue.%s.retry_policy", provider), "max_count"},
 		{fmt.Sprintf("remote_queue.%s.access_key", provider), key},
 		{fmt.Sprintf("remote_queue.%s.secret_key", provider), secret},
-		{fmt.Sprintf("remote_queue.%s.send_interval", provider), "5s"},
-		{fmt.Sprintf("remote_queue.%s.encoding_format", provider), "s2s"},
 	}, queueChangedFieldsOutputs)
 
 	assert.Equal(t, 5, len(pipelineChangedFields))
@@ -2285,6 +2275,7 @@ func TestGetQueueAndPipelineInputsForIndexerConfFilesAllFields(t *testing.T) {
 	execWorkers := int32(4)
 	minPending := int32(100)
 	renewRetries := int32(3)
+	enableSharedReceipts := true
 	sslVerify := true
 
 	queue := &enterpriseApi.Queue{
@@ -2311,6 +2302,7 @@ func TestGetQueueAndPipelineInputsForIndexerConfFilesAllFields(t *testing.T) {
 				EncodingFormat:          "json",
 				SendInterval:            "10s",
 				DLQProcessInterval:      "2d",
+				EnableSharedReceipts:    &enableSharedReceipts,
 			},
 		},
 	}
@@ -2364,6 +2356,7 @@ func TestGetQueueAndPipelineInputsForIndexerConfFilesAllFields(t *testing.T) {
 	assert.True(t, containsKV(inputs, fmt.Sprintf("remote_queue.%s.min_pending_messages", provider), "100"))
 	assert.True(t, containsKV(inputs, fmt.Sprintf("remote_queue.%s.renew_retries", provider), "3"))
 	assert.True(t, containsKV(inputs, fmt.Sprintf("remote_queue.%s.dead_letter_queue.process_interval", provider), "2d"))
+	assert.True(t, containsKV(inputs, fmt.Sprintf("remote_queue.%s.enable_shared_receipts", provider), "true"))
 
 	// Verify S3/large_message_store fields in inputs
 	assert.True(t, containsKV(inputs, fmt.Sprintf("remote_queue.%s.large_message_store.sslVerifyServerCert", provider), "true"))
